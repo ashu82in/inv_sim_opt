@@ -20,7 +20,6 @@ avg_demand = st.sidebar.number_input("Average Demand", value=25)
 cov = st.sidebar.number_input("Coefficient of Variation", value=0.8)
 lead_time = st.sidebar.number_input("Lead Time (Days)", value=3)
 
-# ✅ RP stays in sidebar
 reorder_point_input = st.sidebar.number_input(
     "Reorder Point",
     value=200,
@@ -33,7 +32,7 @@ holding_cost_percent = st.sidebar.number_input("Holding Cost (%)", value=20.0)
 ordering_cost = st.sidebar.number_input("Ordering Cost", value=500)
 num_days = st.sidebar.slider("Simulation Days", 100, 2000, 365)
 
-st.sidebar.caption("👉 Used when Service Level toggle is OFF")
+st.sidebar.caption("👉 Used when Service Level checkbox is OFF")
 
 holding_cost_rate = holding_cost_percent / 100
 std_demand = avg_demand * cov
@@ -147,14 +146,14 @@ def run_simulation_metrics(demand, reorder_point, order_qty):
 
 
 # =========================================================
-# TAB
+# MAIN TAB
 # =========================================================
 
 tab1 = st.tabs(["Simulation"])[0]
 
 with tab1:
 
-    # 🔁 RESET BUTTON (TOP)
+    # RESET BUTTON (TOP)
     col_btn, _ = st.columns([1,5])
     with col_btn:
         if st.button("Reset Demand Scenario"):
@@ -162,20 +161,25 @@ with tab1:
             st.rerun()
 
     # =========================================================
-    # POLICY INPUT (FINAL FIXED LOGIC)
+    # POLICY INPUT (CHECKBOX BASED - FINAL)
     # =========================================================
 
     st.subheader("Policy Input")
 
-    use_service_level = st.toggle("Use Service Level", value=True)
+    use_service_level = st.checkbox(
+        "Use Service Level to Calculate Reorder Point",
+        value=st.session_state.get("use_sl", True),
+        key="use_sl"
+    )
 
     service_level_input = st.slider(
         "Target Service Level",
         0.80, 0.99, 0.95,
+        key="sl_value",
         disabled=not use_service_level
     )
 
-    # ✅ SINGLE SOURCE OF TRUTH
+    # SINGLE SOURCE OF TRUTH
     reorder_point = reorder_point_input
 
     if use_service_level:
@@ -185,7 +189,7 @@ with tab1:
         reorder_point = int(mean_lt + z * std_lt)
         st.success(f"Auto Reorder Point: {reorder_point}")
     else:
-        st.info(f"Manual Reorder Point: {reorder_point}")
+        st.info(f"Manual Reorder Point (Sidebar): {reorder_point}")
 
     # =========================================================
     # RUN SIMULATION
@@ -194,10 +198,7 @@ with tab1:
     df = run_simulation(demand, reorder_point, order_qty)
     df["Date"] = pd.date_range(start="2024-01-01", periods=num_days)
 
-    # =========================================================
     # KPIs
-    # =========================================================
-
     stockout_days = (df["Closing Balance"] == 0).sum()
     avg_inventory = df["Closing Balance Including Pipeline"].mean()
     avg_age = avg_inventory / df["Demand"].mean()
@@ -225,10 +226,7 @@ with tab1:
 
     _, cost_eoq = run_simulation_metrics(demand, reorder_point, int(eoq))
 
-    # =========================================================
-    # DISPLAY
-    # =========================================================
-
+    # KPI DISPLAY
     st.subheader("Inventory KPIs")
 
     c1,c2,c3,c4 = st.columns(4)
@@ -265,10 +263,7 @@ with tab1:
     k2.metric("Cost with EOQ", round(cost_eoq,0))
     k3.metric("Savings Using EOQ", round(total_inventory_cost-cost_eoq,0))
 
-    # =========================================================
     # INSIGHTS
-    # =========================================================
-
     st.subheader("🔍 Business Insights")
 
     df_eoq = run_simulation(demand, reorder_point, int(eoq))
@@ -286,34 +281,23 @@ with tab1:
     else:
         st.success("✅ Inventory policy is balanced")
 
-    # =========================================================
     # CHART
-    # =========================================================
-
     st.subheader("Inventory Behaviour")
 
     fig = go.Figure()
-
     fig.add_trace(go.Scatter(x=df["Date"], y=df["Closing Balance"], name="Closing"))
     fig.add_trace(go.Scatter(x=df["Date"], y=df["Closing Balance Including Pipeline"], name="Position"))
 
     fig.add_hline(y=reorder_point, line_dash="dash")
-
     fig.add_hrect(y0=0, y1=reorder_point*0.5, fillcolor="red", opacity=0.1)
     fig.add_hrect(y0=reorder_point*0.5, y1=reorder_point, fillcolor="yellow", opacity=0.1)
 
     st.plotly_chart(fig, use_container_width=True)
 
-    # =========================================================
     # DEMAND HISTOGRAM
-    # =========================================================
-
     st.subheader("Demand Distribution")
     st.plotly_chart(px.histogram(df, x="Demand"), use_container_width=True)
 
-    # =========================================================
     # DATA TABLE
-    # =========================================================
-
     st.subheader("Simulation Data")
     st.dataframe(df)

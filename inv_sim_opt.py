@@ -247,12 +247,10 @@ with tab2:
         elapsed = time.time() - start_time
         st.success(f"Successfully simulated {len(res_df):,} total paths in {round(elapsed, 2)} seconds.")
 
-        # =========================================================
-        # 📊 PROBABILITY & RISK METRICS (WITH CAPTIONS)
-        # =========================================================
+        # --- Probability KPIs (Refined Concise Phrasing) ---
         st.write("### 📊 Probability & Risk Metrics (Current Policy)")
         
-        # Dynamic threshold calculation based on simulation days
+        # Calculate thresholds based on the actual simulation length
         d_1 = round(num_days * 0.01, 1)
         d_5 = round(num_days * 0.05, 1)
         d_10 = round(num_days * 0.10, 1)
@@ -267,17 +265,17 @@ with tab2:
         with k2:
             p_1 = (curr_df['stockout_days'] < (num_days * 0.01)).sum() / n_scenarios * 100
             st.metric("Stockouts < 1% Days", f"{round(p_1, 2)}%")
-            st.caption(f"Stockouts will last < {d_1} days in {round(p_1, 1)}% of cases.")
+            st.caption(f"Less Than {d_1} days in {round(p_1, 1)}% of cases.")
 
         with k3:
             p_5 = (curr_df['stockout_days'] < (num_days * 0.05)).sum() / n_scenarios * 100
             st.metric("Stockouts < 5% Days", f"{round(p_5, 2)}%")
-            st.caption(f"Stockouts will last < {d_5} days in {round(p_5, 1)}% of cases.")
+            st.caption(f"Less Than {d_5} days in {round(p_5, 1)}% of cases.")
 
         with k4:
             p_10 = (curr_df['stockout_days'] < (num_days * 0.10)).sum() / n_scenarios * 100
             st.metric("Stockouts < 10% Days", f"{round(p_10, 2)}%")
-            st.caption(f"Stockouts will last < {d_10} days in {round(p_10, 1)}% of cases.")
+            st.caption(f"Less Than {d_10} days in {round(p_10, 1)}% of cases.")
 
         st.divider()
 

@@ -6,26 +6,23 @@ import plotly.graph_objects as go
 from scipy.stats import norm
 
 st.set_page_config(layout="wide")
-
 st.title("Inventory Policy Simulator")
 
 # =========================================================
-# SESSION STATE INIT
+# SESSION STATE
 # =========================================================
-
 if "demand_sequence" not in st.session_state:
     st.session_state.demand_sequence = None
 
 # =========================================================
-# SIDEBAR INPUTS
+# SIDEBAR
 # =========================================================
-
 st.sidebar.header("Inventory Inputs")
 
 opening_balance = st.sidebar.number_input("Opening Balance", value=500)
 avg_demand = st.sidebar.number_input("Average Demand", value=25)
 cov = st.sidebar.number_input("Coefficient of Variation", value=0.8)
-lead_time = st.sidebar.number_input("Lead Time (Days)", value=3)
+lead_time = st.sidebar.number_input("Lead Time", value=3)
 
 reorder_point_input = st.sidebar.number_input("Reorder Point", value=200)
 
@@ -41,14 +38,12 @@ std_demand = avg_demand * cov
 # =========================================================
 # RESET DEMAND (NO RERUN)
 # =========================================================
-
 if st.button("Reset Demand Scenario"):
     st.session_state.demand_sequence = None
 
 # =========================================================
-# DEMAND GENERATION
+# DEMAND
 # =========================================================
-
 if st.session_state.demand_sequence is None:
     st.session_state.demand_sequence = np.maximum(
         0,
@@ -58,10 +53,10 @@ if st.session_state.demand_sequence is None:
 demand = st.session_state.demand_sequence
 
 # =========================================================
-# FUNCTIONS
+# SIMULATION FUNCTION
 # =========================================================
-
 def run_simulation(demand, reorder_point, order_qty):
+
     inventory = opening_balance
     pipeline_orders = []
     data = []
@@ -105,50 +100,9 @@ def run_simulation(demand, reorder_point, order_qty):
         "Closing Balance Including Pipeline"
     ])
 
-def run_simulation_metrics(demand, reorder_point, order_qty):
-    inventory = opening_balance
-    pipeline_orders = []
-
-    stockout_days = 0
-    holding_cost_total = 0
-    orders_count = 0
-
-    for day in range(num_days):
-
-        shipment_received = 0
-        for order in pipeline_orders.copy():
-            if order[0] == day:
-                shipment_received += order[1]
-                pipeline_orders.remove(order)
-
-        inventory += shipment_received
-
-        demand_today = demand[day]
-        inventory -= demand_today
-
-        if inventory < 0:
-            inventory = 0
-            stockout_days += 1
-
-        pipeline_qty = sum(qty for arrival, qty in pipeline_orders)
-        inventory_position = inventory + pipeline_qty
-
-        if inventory_position < reorder_point:
-            pipeline_orders.append((day + lead_time, order_qty))
-            orders_count += 1
-
-        closing_with_pipeline = inventory + sum(qty for arrival, qty in pipeline_orders)
-
-        inventory_value = closing_with_pipeline * unit_value
-        holding_cost_total += inventory_value * holding_cost_rate / 365
-
-    total_cost = holding_cost_total + orders_count * ordering_cost
-    return stockout_days, total_cost
-
 # =========================================================
-# POLICY INPUT (CHECKBOX)
+# POLICY INPUT
 # =========================================================
-
 st.subheader("Policy Input")
 
 use_service_level = st.checkbox(
@@ -177,27 +131,19 @@ else:
 # =========================================================
 # RUN SIMULATION
 # =========================================================
-
 df = run_simulation(demand, reorder_point, order_qty)
 df["Date"] = pd.date_range(start="2024-01-01", periods=num_days)
 
 # =========================================================
 # KPI CALCULATIONS
 # =========================================================
-
 stockout_days = (df["Closing Balance"] == 0).sum()
-
-average_inventory = df["Closing Balance Including Pipeline"].mean()
-average_age_inventory = average_inventory / df["Demand"].mean()
 
 df["Blocked Working Capital"] = df["Inventory Position"] * unit_value
 average_working_capital = df["Blocked Working Capital"].mean()
 
-min_inventory = df["Closing Balance"].min()
-max_inventory = df["Closing Balance"].max()
-
-min_wc = df["Blocked Working Capital"].min()
-max_wc = df["Blocked Working Capital"].max()
+average_inventory = df["Closing Balance Including Pipeline"].mean()
+average_age_inventory = average_inventory / df["Demand"].mean()
 
 df["Inventory Value"] = df["Closing Balance Including Pipeline"] * unit_value
 df["Holding Cost"] = df["Inventory Value"] * holding_cost_rate / 365
@@ -206,16 +152,15 @@ total_holding_cost = df["Holding Cost"].sum()
 total_ordering_cost = (df["New Order"] > 0).sum() * ordering_cost
 total_inventory_cost = total_holding_cost + total_ordering_cost
 
-annual_demand = avg_demand * 365
-holding_cost_per_unit = unit_value * holding_cost_rate
-eoq = np.sqrt((2 * annual_demand * ordering_cost) / holding_cost_per_unit)
-
-_, cost_eoq = run_simulation_metrics(demand, reorder_point, int(eoq))
+# =========================================================
+# INVENTORY AGE
+# =========================================================
+df["Inventory Age"] = df["Closing Balance Including Pipeline"] / df["Demand"].replace(0, np.nan)
+df["Inventory Age"] = df["Inventory Age"].fillna(0)
 
 # =========================================================
-# DISPLAY KPIs
+# KPI DISPLAY
 # =========================================================
-
 st.subheader("Inventory KPIs")
 
 c1,c2,c3,c4 = st.columns(4)
@@ -224,38 +169,9 @@ c2.metric("Average Age of Inventory", round(average_age_inventory,1))
 c3.metric("Average Inventory", round(average_inventory,0))
 c4.metric("Avg Working Capital", round(average_working_capital,0))
 
-st.subheader("Inventory Range")
-
-r1,r2,r3,r4 = st.columns(4)
-r1.metric("Minimum Inventory", round(min_inventory,0))
-r2.metric("Maximum Inventory", round(max_inventory,0))
-r3.metric("Minimum Working Capital", round(min_wc,0))
-r4.metric("Maximum Working Capital", round(max_wc,0))
-
-st.subheader("Inventory Cost Metrics")
-
-cc1,cc2,cc3 = st.columns(3)
-cc1.metric("Total Holding Cost", round(total_holding_cost,0))
-cc2.metric("Total Ordering Cost", round(total_ordering_cost,0))
-cc3.metric("Total Inventory Cost", round(total_inventory_cost,0))
-
-st.subheader("EOQ")
-
-e1,e2 = st.columns(2)
-e1.metric("Economic Order Quantity", round(eoq,0))
-e2.metric("Selected Order Quantity", order_qty)
-
-st.subheader("Cost Comparison")
-
-k1,k2,k3 = st.columns(3)
-k1.metric("Cost with Current Policy", round(total_inventory_cost,0))
-k2.metric("Cost with EOQ", round(cost_eoq,0))
-k3.metric("Savings Using EOQ", round(total_inventory_cost-cost_eoq,0))
-
 # =========================================================
-# CHART
+# INVENTORY CHART
 # =========================================================
-
 st.subheader("Inventory Behaviour")
 
 fig = go.Figure()
@@ -269,15 +185,87 @@ fig.add_hrect(y0=reorder_point*0.5, y1=reorder_point, fillcolor="yellow", opacit
 st.plotly_chart(fig, use_container_width=True)
 
 # =========================================================
+# WORKING CAPITAL
+# =========================================================
+st.subheader("Blocked Working Capital")
+
+fig_wc = px.line(df, x="Date", y="Blocked Working Capital")
+st.plotly_chart(fig_wc, use_container_width=True)
+
+# =========================================================
+# INVENTORY AGE CHART
+# =========================================================
+st.subheader("Inventory Age")
+
+fig_age = px.line(df, x="Date", y="Inventory Age")
+st.plotly_chart(fig_age, use_container_width=True)
+
+# =========================================================
+# AGING BUCKETS
+# =========================================================
+st.subheader("Aging Buckets")
+
+conditions = [
+    (df["Inventory Age"] <= 30),
+    (df["Inventory Age"] <= 60),
+    (df["Inventory Age"] <= 90),
+    (df["Inventory Age"] > 90)
+]
+
+choices = ["0-30", "31-60", "61-90", "90+"]
+
+df["Age Bucket"] = np.select(conditions, choices)
+
+bucket_df = df.groupby(["Date", "Age Bucket"])["Inventory Value"].sum().reset_index()
+
+fig_bucket = px.bar(bucket_df, x="Date", y="Inventory Value", color="Age Bucket")
+st.plotly_chart(fig_bucket, use_container_width=True)
+
+# =========================================================
+# 🚨 DEAD STOCK
+# =========================================================
+st.subheader("🚨 Dead Stock Analysis")
+
+df["Dead Stock Value"] = np.where(
+    df["Inventory Age"] > 90,
+    df["Closing Balance Including Pipeline"] * unit_value,
+    0
+)
+
+dead_stock_value = df["Dead Stock Value"].sum()
+total_inventory_value = df["Inventory Value"].sum()
+
+dead_stock_percent = (dead_stock_value / total_inventory_value * 100) if total_inventory_value > 0 else 0
+dead_stock_days = (df["Dead Stock Value"] > 0).sum()
+
+# ALERT
+if dead_stock_percent > 30:
+    st.error(f"🚨 CRITICAL: ₹{round(dead_stock_value)} ({round(dead_stock_percent,1)}%) dead stock")
+elif dead_stock_percent > 15:
+    st.warning(f"⚠️ ₹{round(dead_stock_value)} ({round(dead_stock_percent,1)}%) dead stock")
+elif dead_stock_value > 0:
+    st.info(f"ℹ️ ₹{round(dead_stock_value)} ({round(dead_stock_percent,1)}%) dead stock")
+else:
+    st.success("✅ No dead stock")
+
+# KPIs
+k1,k2,k3 = st.columns(3)
+k1.metric("Dead Stock Value", round(dead_stock_value))
+k2.metric("Dead Stock %", f"{round(dead_stock_percent,1)}%")
+k3.metric("Days with Dead Stock", dead_stock_days)
+
+# Trend
+fig_dead = px.line(df, x="Date", y="Dead Stock Value")
+st.plotly_chart(fig_dead, use_container_width=True)
+
+# =========================================================
 # DEMAND
 # =========================================================
-
 st.subheader("Demand Distribution")
 st.plotly_chart(px.histogram(df, x="Demand"), use_container_width=True)
 
 # =========================================================
 # DATA
 # =========================================================
-
 st.subheader("Simulation Data")
 st.dataframe(df)

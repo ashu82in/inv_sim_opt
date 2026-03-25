@@ -19,12 +19,21 @@ opening_balance = st.sidebar.number_input("Opening Balance", value=500)
 avg_demand = st.sidebar.number_input("Average Demand", value=25)
 cov = st.sidebar.number_input("Coefficient of Variation", value=0.8)
 lead_time = st.sidebar.number_input("Lead Time (Days)", value=3)
-reorder_point_input = st.sidebar.number_input("Manual Reorder Point", value=200)
+
+# ✅ RP stays in sidebar
+reorder_point_input = st.sidebar.number_input(
+    "Reorder Point",
+    value=200,
+    key="rp_sidebar"
+)
+
 order_qty = st.sidebar.number_input("Order Quantity", value=300)
 unit_value = st.sidebar.number_input("Value Per Unit", value=100)
 holding_cost_percent = st.sidebar.number_input("Holding Cost (%)", value=20.0)
 ordering_cost = st.sidebar.number_input("Ordering Cost", value=500)
 num_days = st.sidebar.slider("Simulation Days", 100, 2000, 365)
+
+st.sidebar.caption("👉 Used when Service Level toggle is OFF")
 
 holding_cost_rate = holding_cost_percent / 100
 std_demand = avg_demand * cov
@@ -145,37 +154,50 @@ tab1 = st.tabs(["Simulation"])[0]
 
 with tab1:
 
-    # RESET BUTTON (TOP)
+    # 🔁 RESET BUTTON (TOP)
     col_btn, _ = st.columns([1,5])
     with col_btn:
         if st.button("Reset Demand Scenario"):
             st.session_state.demand_sequence = None
             st.rerun()
 
-    # POLICY INPUT
+    # =========================================================
+    # POLICY INPUT (FINAL FIXED LOGIC)
+    # =========================================================
+
     st.subheader("Policy Input")
 
     use_service_level = st.toggle("Use Service Level", value=True)
 
     service_level_input = st.slider(
         "Target Service Level",
-        0.80, 0.99, 0.95
+        0.80, 0.99, 0.95,
+        disabled=not use_service_level
     )
+
+    # ✅ SINGLE SOURCE OF TRUTH
+    reorder_point = reorder_point_input
 
     if use_service_level:
         z = norm.ppf(service_level_input)
         mean_lt = avg_demand * lead_time
         std_lt = std_demand * np.sqrt(lead_time)
         reorder_point = int(mean_lt + z * std_lt)
-        st.info(f"Calculated Reorder Point: {reorder_point}")
+        st.success(f"Auto Reorder Point: {reorder_point}")
     else:
-        reorder_point = reorder_point_input
+        st.info(f"Manual Reorder Point: {reorder_point}")
 
+    # =========================================================
     # RUN SIMULATION
+    # =========================================================
+
     df = run_simulation(demand, reorder_point, order_qty)
     df["Date"] = pd.date_range(start="2024-01-01", periods=num_days)
 
+    # =========================================================
     # KPIs
+    # =========================================================
+
     stockout_days = (df["Closing Balance"] == 0).sum()
     avg_inventory = df["Closing Balance Including Pipeline"].mean()
     avg_age = avg_inventory / df["Demand"].mean()
@@ -203,7 +225,10 @@ with tab1:
 
     _, cost_eoq = run_simulation_metrics(demand, reorder_point, int(eoq))
 
-    # KPI DISPLAY
+    # =========================================================
+    # DISPLAY
+    # =========================================================
+
     st.subheader("Inventory KPIs")
 
     c1,c2,c3,c4 = st.columns(4)
@@ -240,7 +265,10 @@ with tab1:
     k2.metric("Cost with EOQ", round(cost_eoq,0))
     k3.metric("Savings Using EOQ", round(total_inventory_cost-cost_eoq,0))
 
+    # =========================================================
     # INSIGHTS
+    # =========================================================
+
     st.subheader("🔍 Business Insights")
 
     df_eoq = run_simulation(demand, reorder_point, int(eoq))
@@ -258,7 +286,10 @@ with tab1:
     else:
         st.success("✅ Inventory policy is balanced")
 
+    # =========================================================
     # CHART
+    # =========================================================
+
     st.subheader("Inventory Behaviour")
 
     fig = go.Figure()
@@ -273,10 +304,16 @@ with tab1:
 
     st.plotly_chart(fig, use_container_width=True)
 
+    # =========================================================
     # DEMAND HISTOGRAM
+    # =========================================================
+
     st.subheader("Demand Distribution")
     st.plotly_chart(px.histogram(df, x="Demand"), use_container_width=True)
 
+    # =========================================================
     # DATA TABLE
+    # =========================================================
+
     st.subheader("Simulation Data")
     st.dataframe(df)

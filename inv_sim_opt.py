@@ -199,8 +199,8 @@ with tab1:
         st.dataframe(df)
 
 with tab2:
-    st.subheader("🎲 Monte Carlo Risk Simulation")
-    n_scenarios = st.number_input("Number of Scenarios", 10, 500, 100)
+    st.subheader("Inventory Multiple Scenario Simulation")
+    n_scenarios = st.number_input("Number of Scenarios", 10, 10000, 100)
     
     if st.button("Run Monte Carlo Analysis"):
         all_results = []

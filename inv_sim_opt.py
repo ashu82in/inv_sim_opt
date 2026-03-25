@@ -205,32 +205,31 @@ with tab1:
         st.dataframe(df)
 
 with tab2:
-    st.subheader("🎲 Monte Carlo Risk & Sensitivity Analysis")
+    st.subheader("Inventory Simulation")
     
-    # Input for high-volume scenarios
+    # Input for high-volume scenarios (Supports up to 100,000)
     n_scenarios = st.number_input("Number of Scenarios to Simulate", min_value=1, max_value=100000, value=100)
     
     if st.button("🚀 Run Comprehensive Risk Test"):
         start_time = time.time()
         sensitivity_results = []
         
-        # Create a placeholder for the status and progress bar
+        # UI Feedback for long runs
         status_text = st.empty()
         progress_bar = st.progress(0)
         
-        # We test Current Lead Time, +1, and +2 for the Sensitivity Table
+        # Test Current Lead Time, +1, and +2 for Sensitivity
         lt_tests = [lead_time, lead_time + 1, lead_time + 2]
         total_steps = len(lt_tests)
         
         for idx, lt_val in enumerate(lt_tests):
             status_text.text(f"Simulating Lead Time: {lt_val} days...")
             
-            # Vectorized demand generation (generates all scenarios at once for speed)
+            # Vectorized demand generation for speed
             all_demands = np.maximum(0, np.random.normal(avg_demand, std_demand, (n_scenarios, num_days))).round()
             
-            # Run the batch
             for i in range(n_scenarios):
-                # calc_aging=False is CRITICAL for 100k runs to avoid memory crashes
+                # calc_aging=False is used here to keep memory usage low for 100k+ runs
                 _, _, metrics = run_full_simulation(
                     all_demands[i], reorder_point, order_qty, num_days, 
                     opening_balance, lt_val, unit_value, 
@@ -246,72 +245,78 @@ with tab2:
         curr_df = res_df[res_df["Tested LT"] == lead_time]
         
         elapsed = time.time() - start_time
-        st.success(f"Successfully simulated {n_scenarios * 3:,} total paths in {round(elapsed, 2)} seconds.")
+        st.success(f"Successfully simulated {len(res_df):,} total paths in {round(elapsed, 2)} seconds.")
 
         # =========================================================
-        # RISK KPIs (Your Requested Metrics)
+        # 📊 PROBABILITY & RISK METRICS (WITH CAPTIONS)
         # =========================================================
         st.write("### 📊 Probability & Risk Metrics (Current Policy)")
         
-        # Calculations
-        stockout_1pct = num_days * 0.01
-        stockout_5pct = num_days * 0.05
-        stockout_10pct = num_days * 0.10
+        # Dynamic threshold calculation based on simulation days
+        d_1 = round(num_days * 0.01, 1)
+        d_5 = round(num_days * 0.05, 1)
+        d_10 = round(num_days * 0.10, 1)
 
         k1, k2, k3, k4 = st.columns(4)
-        k1.metric("Prob: No Stockouts", f"{round((curr_df['stockout_days']==0).sum()/n_scenarios*100, 2)}%")
-        k2.metric("Stockouts < 1% Days", f"{round((curr_df['stockout_days'] < stockout_1pct).sum()/n_scenarios*100, 2)}%")
-        k3.metric("Stockouts < 5% Days", f"{round((curr_df['stockout_days'] < stockout_5pct).sum()/n_scenarios*100, 2)}%")
-        k4.metric("Stockouts < 10% Days", f"{round((curr_df['stockout_days'] < stockout_10pct).sum()/n_scenarios*100, 2)}%")
+        
+        with k1:
+            p_no_so = (curr_df['stockout_days'] == 0).sum() / n_scenarios * 100
+            st.metric("Prob: No Stockouts", f"{round(p_no_so, 2)}%")
+            st.caption("Chance of zero stockout days.")
 
-        k5, k6, k7 = st.columns(3)
-        k5.metric("Avg Inventory Cost", f"₹{round(curr_df['total_cost'].mean(), 0)}")
-        k6.metric("Avg System Inventory", f"{round(curr_df['avg_inv'].mean(), 0)} Units")
-        k7.metric("WC Risk (95th Pctl)", f"₹{round(curr_df['avg_wc'].quantile(0.95), 0)}")
+        with k2:
+            p_1 = (curr_df['stockout_days'] < (num_days * 0.01)).sum() / n_scenarios * 100
+            st.metric("Stockouts < 1% Days", f"{round(p_1, 2)}%")
+            st.caption(f"Stockouts will last < {d_1} days in {round(p_1, 1)}% of cases.")
 
-        # =========================================================
-        # SENSITIVITY TABLE
-        # =========================================================
+        with k3:
+            p_5 = (curr_df['stockout_days'] < (num_days * 0.05)).sum() / n_scenarios * 100
+            st.metric("Stockouts < 5% Days", f"{round(p_5, 2)}%")
+            st.caption(f"Stockouts will last < {d_5} days in {round(p_5, 1)}% of cases.")
+
+        with k4:
+            p_10 = (curr_df['stockout_days'] < (num_days * 0.10)).sum() / n_scenarios * 100
+            st.metric("Stockouts < 10% Days", f"{round(p_10, 2)}%")
+            st.caption(f"Stockouts will last < {d_10} days in {round(p_10, 1)}% of cases.")
+
         st.divider()
+
+        # =========================================================
+        # 📋 SENSITIVITY TABLE
+        # =========================================================
         st.write("### 📋 Lead Time Sensitivity Table")
+        st.info("Visualizing the impact of supply chain delays (+1 and +2 days) on your KPIs.")
+        
         sens_table = res_df.groupby("Tested LT").agg({
             "stockout_days": ["mean", lambda x: (x == 0).sum() / n_scenarios * 100],
             "total_cost": "mean",
             "avg_wc": "mean"
         })
         sens_table.columns = ["Avg Stockout Days", "Prob: No Stockout (%)", "Avg Cost (₹)", "Avg Working Capital (₹)"]
-        st.table(sens_table.style.format("{:.2f}").highlight_min(axis=0, color='#ccffcc').highlight_max(axis=0, color='#ffcccc'))
+        st.table(sens_table.style.format("{:.2f}").highlight_max(axis=0, color='#ffcccc'))
 
         # =========================================================
-        # VISUALIZATIONS (Distributions)
+        # 📈 RISK DISTRIBUTIONS (ALL 4 CHARTS)
         # =========================================================
         st.divider()
-        st.write("### 📈 Risk Distributions")
-        c_dist1, c_dist2 = st.columns(2)
+        st.write("### 📈 Risk Distributions (Current Lead Time)")
         
-        with c_dist1:
-            # Cost Distribution Histogram
-            fig_cost = px.histogram(
-                curr_df, x="total_cost", 
-                title="Total Inventory Cost Probability",
-                labels={'total_cost': 'Annual Cost (₹)'},
-                color_discrete_sequence=['#EF553B'],
-                nbins=50
-            )
-            fig_cost.add_vline(x=curr_df['total_cost'].mean(), line_dash="dash", line_color="black", annotation_text="Average")
+        # Row 1: Costs and Stockouts
+        r1c1, r1c2 = st.columns(2)
+        with r1c1:
+            fig_cost = px.histogram(curr_df, x="total_cost", title="Annual Inventory Cost Frequency", color_discrete_sequence=['#EF553B'])
+            fig_cost.add_vline(x=curr_df['total_cost'].mean(), line_dash="dash", line_color="black", annotation_text="Mean")
             st.plotly_chart(fig_cost, use_container_width=True)
-            
-        with c_dist2:
-            # Stockout Severity Histogram
-            fig_so = px.histogram(
-                curr_df, x="stockout_days", 
-                title="Stockout Days Severity",
-                labels={'stockout_days': 'Days Out of Stock'},
-                color_discrete_sequence=['#FFA15A'],
-                nbins=30
-            )
-            st.plotly_chart(fig_so, use_container_width=True)
+        with r1c2:
+            st.plotly_chart(px.histogram(curr_df, x="stockout_days", title="Stockout Severity Distribution", color_discrete_sequence=['#FFA15A']), use_container_width=True)
+
+        # Row 2: Inventory Levels
+        r2c1, r2c2 = st.columns(2)
+        with r2c1:
+            st.plotly_chart(px.histogram(curr_df, x="avg_inv", title="Average Inventory Distribution", color_discrete_sequence=['#636EFA']), use_container_width=True)
+        with r2c2:
+            st.plotly_chart(px.histogram(curr_df, x="min_inv", title="Minimum Inventory (Safety Buffer) Distribution", color_discrete_sequence=['#00CC96']), use_container_width=True)
 
         # Statistical Summary Table
-        with st.expander("View Full Statistical Summary"):
+        with st.expander("View Full Statistical Raw Data"):
             st.dataframe(curr_df.describe().T)

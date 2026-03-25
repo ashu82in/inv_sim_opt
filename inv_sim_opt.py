@@ -10,6 +10,19 @@ st.set_page_config(layout="wide")
 st.title("Inventory Policy Simulator")
 
 # =========================================================
+# 🔥 SESSION STATE INITIALIZATION (CRITICAL FIX)
+# =========================================================
+
+if "use_sl" not in st.session_state:
+    st.session_state.use_sl = True
+
+if "sl_value" not in st.session_state:
+    st.session_state.sl_value = 0.95
+
+if "demand_sequence" not in st.session_state:
+    st.session_state.demand_sequence = None
+
+# =========================================================
 # SIDEBAR INPUTS
 # =========================================================
 
@@ -32,17 +45,12 @@ holding_cost_percent = st.sidebar.number_input("Holding Cost (%)", value=20.0)
 ordering_cost = st.sidebar.number_input("Ordering Cost", value=500)
 num_days = st.sidebar.slider("Simulation Days", 100, 2000, 365)
 
-st.sidebar.caption("👉 Used when Service Level checkbox is OFF")
-
 holding_cost_rate = holding_cost_percent / 100
 std_demand = avg_demand * cov
 
 # =========================================================
-# DEMAND STATE
+# DEMAND GENERATION
 # =========================================================
-
-if "demand_sequence" not in st.session_state:
-    st.session_state.demand_sequence = None
 
 if st.session_state.demand_sequence is None:
     st.session_state.demand_sequence = np.maximum(
@@ -57,6 +65,7 @@ demand = st.session_state.demand_sequence
 # =========================================================
 
 def run_simulation(demand, reorder_point, order_qty):
+
     inventory = opening_balance
     pipeline_orders = []
     data = []
@@ -104,6 +113,7 @@ def run_simulation(demand, reorder_point, order_qty):
 
 
 def run_simulation_metrics(demand, reorder_point, order_qty):
+
     inventory = opening_balance
     pipeline_orders = []
 
@@ -146,158 +156,109 @@ def run_simulation_metrics(demand, reorder_point, order_qty):
 
 
 # =========================================================
-# MAIN TAB
+# MAIN UI
 # =========================================================
 
-tab1 = st.tabs(["Simulation"])[0]
+# RESET BUTTON
+col_btn, _ = st.columns([1,5])
+with col_btn:
+    if st.button("Reset Demand Scenario"):
+        st.session_state.demand_sequence = None
+        st.rerun()
 
-with tab1:
+# =========================================================
+# POLICY INPUT (FINAL FIXED)
+# =========================================================
 
-    # RESET BUTTON (TOP)
-    col_btn, _ = st.columns([1,5])
-    with col_btn:
-        if st.button("Reset Demand Scenario"):
-            st.session_state.demand_sequence = None
-            st.rerun()
+st.subheader("Policy Input")
 
-    # =========================================================
-    # POLICY INPUT (CHECKBOX BASED - FINAL)
-    # =========================================================
+use_service_level = st.checkbox(
+    "Use Service Level to Calculate Reorder Point",
+    key="use_sl"
+)
 
-    st.subheader("Policy Input")
+service_level_input = st.slider(
+    "Target Service Level",
+    0.80, 0.99,
+    key="sl_value",
+    disabled=not use_service_level
+)
 
-    use_service_level = st.checkbox(
-        "Use Service Level to Calculate Reorder Point",
-        value=st.session_state.get("use_sl", True),
-        key="use_sl"
-    )
+# ✅ SINGLE SOURCE OF TRUTH
+reorder_point = reorder_point_input
 
-    service_level_input = st.slider(
-        "Target Service Level",
-        0.80, 0.99, 0.95,
-        key="sl_value",
-        disabled=not use_service_level
-    )
+if use_service_level:
+    z = norm.ppf(service_level_input)
+    mean_lt = avg_demand * lead_time
+    std_lt = std_demand * np.sqrt(lead_time)
+    reorder_point = int(mean_lt + z * std_lt)
+    st.success(f"Auto Reorder Point: {reorder_point}")
+else:
+    st.info(f"Manual Reorder Point: {reorder_point}")
 
-    # SINGLE SOURCE OF TRUTH
-    reorder_point = reorder_point_input
+# =========================================================
+# RUN SIMULATION
+# =========================================================
 
-    if use_service_level:
-        z = norm.ppf(service_level_input)
-        mean_lt = avg_demand * lead_time
-        std_lt = std_demand * np.sqrt(lead_time)
-        reorder_point = int(mean_lt + z * std_lt)
-        st.success(f"Auto Reorder Point: {reorder_point}")
-    else:
-        st.info(f"Manual Reorder Point (Sidebar): {reorder_point}")
+df = run_simulation(demand, reorder_point, order_qty)
+df["Date"] = pd.date_range(start="2024-01-01", periods=num_days)
 
-    # =========================================================
-    # RUN SIMULATION
-    # =========================================================
+# =========================================================
+# KPIs
+# =========================================================
 
-    df = run_simulation(demand, reorder_point, order_qty)
-    df["Date"] = pd.date_range(start="2024-01-01", periods=num_days)
+stockout_days = (df["Closing Balance"] == 0).sum()
+avg_inventory = df["Closing Balance Including Pipeline"].mean()
+avg_age = avg_inventory / df["Demand"].mean()
 
-    # KPIs
-    stockout_days = (df["Closing Balance"] == 0).sum()
-    avg_inventory = df["Closing Balance Including Pipeline"].mean()
-    avg_age = avg_inventory / df["Demand"].mean()
+df["Blocked Working Capital"] = df["Inventory Position"] * unit_value
+avg_wc = df["Blocked Working Capital"].mean()
 
-    df["Blocked Working Capital"] = df["Inventory Position"] * unit_value
-    avg_wc = df["Blocked Working Capital"].mean()
+df["Inventory Value"] = df["Closing Balance Including Pipeline"] * unit_value
+df["Holding Cost"] = df["Inventory Value"] * holding_cost_rate / 365
 
-    min_inventory = df["Closing Balance"].min()
-    max_inventory = df["Closing Balance"].max()
+total_cost = df["Holding Cost"].sum()
 
-    min_wc = df["Blocked Working Capital"].min()
-    max_wc = df["Blocked Working Capital"].max()
+# =========================================================
+# DISPLAY
+# =========================================================
 
-    df["Inventory Value"] = df["Closing Balance Including Pipeline"] * unit_value
-    df["Holding Cost"] = df["Inventory Value"] * holding_cost_rate / 365
+st.subheader("Inventory KPIs")
 
-    total_holding_cost = df["Holding Cost"].sum()
-    total_ordering_cost = (df["New Order"] > 0).sum() * ordering_cost
-    total_inventory_cost = total_holding_cost + total_ordering_cost
+c1,c2,c3,c4 = st.columns(4)
+c1.metric("Stockout Days", stockout_days)
+c2.metric("Average Age", round(avg_age,1))
+c3.metric("Average Inventory", round(avg_inventory,0))
+c4.metric("Avg Working Capital", round(avg_wc,0))
 
-    # EOQ
-    annual_demand = avg_demand * 365
-    holding_cost_per_unit = unit_value * holding_cost_rate
-    eoq = np.sqrt((2 * annual_demand * ordering_cost) / holding_cost_per_unit)
+# =========================================================
+# CHART
+# =========================================================
 
-    _, cost_eoq = run_simulation_metrics(demand, reorder_point, int(eoq))
+st.subheader("Inventory Behaviour")
 
-    # KPI DISPLAY
-    st.subheader("Inventory KPIs")
+fig = go.Figure()
 
-    c1,c2,c3,c4 = st.columns(4)
-    c1.metric("Stockout Days", stockout_days)
-    c2.metric("Average Age of Inventory", round(avg_age,1))
-    c3.metric("Average Inventory", round(avg_inventory,0))
-    c4.metric("Avg Working Capital", round(avg_wc,0))
+fig.add_trace(go.Scatter(x=df["Date"], y=df["Closing Balance"], name="Closing"))
+fig.add_trace(go.Scatter(x=df["Date"], y=df["Closing Balance Including Pipeline"], name="Position"))
 
-    st.subheader("Inventory Range")
+fig.add_hline(y=reorder_point, line_dash="dash")
 
-    r1,r2,r3,r4 = st.columns(4)
-    r1.metric("Minimum Inventory", round(min_inventory,0))
-    r2.metric("Maximum Inventory", round(max_inventory,0))
-    r3.metric("Minimum Working Capital", round(min_wc,0))
-    r4.metric("Maximum Working Capital", round(max_wc,0))
+fig.add_hrect(y0=0, y1=reorder_point*0.5, fillcolor="red", opacity=0.1)
+fig.add_hrect(y0=reorder_point*0.5, y1=reorder_point, fillcolor="yellow", opacity=0.1)
 
-    st.subheader("Inventory Cost Metrics")
+st.plotly_chart(fig, use_container_width=True)
 
-    cc1,cc2,cc3 = st.columns(3)
-    cc1.metric("Total Holding Cost", round(total_holding_cost,0))
-    cc2.metric("Total Ordering Cost", round(total_ordering_cost,0))
-    cc3.metric("Total Inventory Cost", round(total_inventory_cost,0))
+# =========================================================
+# DEMAND
+# =========================================================
 
-    st.subheader("EOQ")
+st.subheader("Demand Distribution")
+st.plotly_chart(px.histogram(df, x="Demand"), use_container_width=True)
 
-    e1,e2 = st.columns(2)
-    e1.metric("Economic Order Quantity", round(eoq,0))
-    e2.metric("Selected Order Quantity", order_qty)
+# =========================================================
+# DATA
+# =========================================================
 
-    st.subheader("Cost Comparison")
-
-    k1,k2,k3 = st.columns(3)
-    k1.metric("Cost with Current Policy", round(total_inventory_cost,0))
-    k2.metric("Cost with EOQ", round(cost_eoq,0))
-    k3.metric("Savings Using EOQ", round(total_inventory_cost-cost_eoq,0))
-
-    # INSIGHTS
-    st.subheader("🔍 Business Insights")
-
-    df_eoq = run_simulation(demand, reorder_point, int(eoq))
-    eoq_inventory = df_eoq["Closing Balance Including Pipeline"].mean()
-    df_eoq["Blocked Working Capital"] = df_eoq["Inventory Position"] * unit_value
-    eoq_wc = df_eoq["Blocked Working Capital"].mean()
-
-    inventory_diff = avg_inventory - eoq_inventory
-    wc_diff = avg_wc - eoq_wc
-
-    if inventory_diff > 0:
-        st.warning(f"⚠️ Excess inventory ~{round(inventory_diff,0)} units (~₹{round(wc_diff,0)})")
-    elif inventory_diff < 0:
-        st.error(f"⚠️ Understocking risk ~{round(abs(inventory_diff),0)} units")
-    else:
-        st.success("✅ Inventory policy is balanced")
-
-    # CHART
-    st.subheader("Inventory Behaviour")
-
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df["Date"], y=df["Closing Balance"], name="Closing"))
-    fig.add_trace(go.Scatter(x=df["Date"], y=df["Closing Balance Including Pipeline"], name="Position"))
-
-    fig.add_hline(y=reorder_point, line_dash="dash")
-    fig.add_hrect(y0=0, y1=reorder_point*0.5, fillcolor="red", opacity=0.1)
-    fig.add_hrect(y0=reorder_point*0.5, y1=reorder_point, fillcolor="yellow", opacity=0.1)
-
-    st.plotly_chart(fig, use_container_width=True)
-
-    # DEMAND HISTOGRAM
-    st.subheader("Demand Distribution")
-    st.plotly_chart(px.histogram(df, x="Demand"), use_container_width=True)
-
-    # DATA TABLE
-    st.subheader("Simulation Data")
-    st.dataframe(df)
+st.subheader("Simulation Data")
+st.dataframe(df)

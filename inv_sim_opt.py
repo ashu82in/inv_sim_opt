@@ -4,6 +4,7 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 import time
+import random
 from scipy.stats import norm
 
 
@@ -334,82 +335,82 @@ with tab2:
 # tab1, tab2, tab3 = st.tabs(["📊 Detailed Analysis", "🎲 Monte Carlo Simulation", "🎯 Policy Optimizer"])
 
 with tab3:
-    st.subheader("🎯 Inventory Policy Optimizer")
-    st.write("This tool calculates the mathematically 'perfect' policy to balance stockout risk against capital costs.")
+    st.subheader("🧬 Genetic Algorithm Policy Optimizer")
+    st.write("Using metaheuristics to evolve the most cost-effective inventory policy for volatile demand.")
 
-    col_opt1, col_opt2 = st.columns(2)
-    
-    with col_opt1:
-        st.write("### 1. Define Target Service Level")
-        opt_service_level = st.slider("Target Service Level (%)", 80.0, 99.9, 95.0, help="The probability that you will NOT run out of stock during the lead time.")
-        
-        # Math for ROP
-        z_score = norm.ppf(opt_service_level / 100)
-        safety_stock = z_score * std_demand * np.sqrt(lead_time)
-        cycle_stock = avg_demand * lead_time
-        optimized_rop = int(cycle_stock + safety_stock)
-        
-    with col_opt2:
-        st.write("### 2. Economic Order Quantity (EOQ)")
-        # Annualizing demand for the EOQ formula
-        annual_demand = avg_demand * 365
-        annual_holding_cost_per_unit = unit_value * holding_cost_rate
-        
-        # EOQ Formula: sqrt((2 * Demand * Setup Cost) / Holding Cost)
-        optimized_q = int(np.sqrt((2 * annual_demand * ordering_cost) / annual_holding_cost_per_unit))
-        
-        st.write(f"**Annual Demand:** {annual_demand:,} units")
-        st.write(f"**Holding Cost/Unit/Year:** ₹{annual_holding_cost_per_unit}")
+    col1, col2 = st.columns(2)
+    with col1:
+        pop_size = st.select_slider("Population Size", options=[10, 20, 50], value=20)
+        generations = st.select_slider("Number of Generations", options=[5, 10, 20], value=10)
+    with col2:
+        stockout_penalty = st.number_input("Stockout Penalty (₹/unit)", value=unit_value*2.0)
+        st.info("Higher penalties force the model to prioritize Safety Stock.")
 
-    st.divider()
-    
-    # --- PROPOSED POLICY DASHBOARD ---
-    st.write("### 🛠️ Proposed Optimized Policy")
-    res1, res2, res3 = st.columns(3)
-    
-    res1.metric("Optimized Reorder Point", optimized_rop, 
-               delta=int(optimized_rop - reorder_point_input), 
-               delta_color="inverse")
-    
-    res2.metric("Optimized Order Quantity", optimized_q, 
-               delta=int(optimized_q - order_qty), 
-               delta_color="inverse")
-    
-    res3.metric("Safety Stock Level", int(safety_stock))
-
-    # --- VALIDATION RUN ---
-    st.divider()
-    st.write("### 🧪 Simulation Validation")
-    st.write("Running 1,000 scenarios with this optimized policy to verify performance...")
-
-    if st.button("Verify Optimized Policy"):
-        val_results = []
-        # Run 1000 scenarios with the NEW suggested ROP and Q
-        v_demands = np.maximum(0, np.random.normal(avg_demand, std_demand, (1000, num_days))).round()
+    if st.button("🧬 Evolve Best Policy"):
+        # --- GA SETTINGS ---
+        # Gene 0: ROP, Gene 1: Qty
+        bounds = [(0, 1000), (100, 2000)] 
         
-        for i in range(1000):
-            _, _, v_m = run_full_simulation(
-                v_demands[i], optimized_rop, optimized_q, num_days, 
-                opening_balance, lead_time, unit_value, 
-                holding_cost_rate, ordering_cost, calc_aging=False
-            )
-            val_results.append(v_m)
+        # 1. Initialize Population
+        pop = []
+        for _ in range(pop_size):
+            pop.append([np.random.randint(bounds[0][0], bounds[0][1]), 
+                        np.random.randint(bounds[1][0], bounds[1][1])])
+        
+        progress_bar = st.progress(0)
+        status = st.empty()
+        history = []
+
+        for gen in range(generations):
+            status.text(f"Generation {gen+1}/{generations}: Evolving policies...")
+            scores = []
             
-        v_df = pd.DataFrame(val_results)
-        
-        # Results
-        vc1, vc2, vc3 = st.columns(3)
-        actual_sl = (v_df['stockout_days'] == 0).sum() / 1000 * 100
-        
-        vc1.metric("Achieved Service Level", f"{round(actual_sl, 1)}%")
-        vc2.metric("Predicted Annual Cost", f"₹{round(v_df['total_cost'].mean(), 0)}")
-        vc3.metric("Avg Working Capital", f"₹{round(v_df['avg_wc'].mean(), 0)}")
-        
-        if actual_sl >= opt_service_level:
-            st.success(f"✅ The optimized policy meets your {opt_service_level}% target!")
-        else:
-            st.warning(f"⚠️ Actual Service Level ({round(actual_sl,1)}%) is slightly lower than target. Consider increasing the Reorder Point manually.")
+            # 2. Fitness Evaluation (Simulation)
+            for individual in pop:
+                r_t, q_t = individual[0], individual[1]
+                # Run 30 scenarios per individual to average out noise
+                sim_costs = []
+                for _ in range(30):
+                    s_dem = np.maximum(0, np.random.normal(avg_demand, std_demand, num_days)).round()
+                    _, _, m = run_full_simulation(s_dem, r_t, q_t, num_days, opening_balance, lead_time, unit_value, holding_cost_rate, ordering_cost, calc_aging=False)
+                    total_p_cost = m['total_cost'] + (m['stockout_days'] * avg_demand * stockout_penalty)
+                    sim_costs.append(total_p_cost)
+                
+                scores.append(np.mean(sim_costs))
+            
+            # Rank Population (Lower cost is better)
+            ranked = [x for _, x in sorted(zip(scores, pop))]
+            best_score = min(scores)
+            history.append(best_score)
+            
+            # 3. Selection (Keep top 25% as parents)
+            parents = ranked[:max(2, pop_size//4)]
+            
+            # 4. Crossover & Mutation (Create next generation)
+            new_pop = parents.copy() # Elitism: Keep best parents
+            while len(new_pop) < pop_size:
+                p1, p2 = random.sample(parents, 2)
+                # Crossover
+                child = [int((p1[0] + p2[0])/2), int((p1[1] + p2[1])/2)]
+                # Mutation (15% chance)
+                if np.random.random() < 0.15:
+                    child[0] = np.clip(child[0] + np.random.randint(-50, 50), bounds[0][0], bounds[0][1])
+                    child[1] = np.clip(child[1] + np.random.randint(-100, 100), bounds[1][0], bounds[1][1])
+                new_pop.append(child)
+            
+            pop = new_pop
+            progress_bar.progress((gen + 1) / generations)
 
-        # Comparison Chart
-        st.write("#### Cost Distribution of Optimized Policy")
-        st.plotly_chart(px.histogram(v_df, x="total_cost", color_discrete_sequence=['#228B22']), use_container_width=True)
+        # Final Results
+        best_r, best_q = parents[0][0], parents[0][1]
+        
+        st.divider()
+        res1, res2, res3 = st.columns(3)
+        res1.metric("Evolved ROP", best_r)
+        res2.metric("Evolved Quantity", best_q)
+        res3.metric("Min Avg Cost", f"₹{round(best_score, 0)}")
+
+        # --- Convergence Chart ---
+        st.write("### 📉 Convergence (Cost Reduction Over Generations)")
+        fig_conv = px.line(x=range(1, generations+1), y=history, labels={'x':'Generation', 'y':'Total Cost'}, markers=True)
+        st.plotly_chart(fig_conv, use_container_width=True)

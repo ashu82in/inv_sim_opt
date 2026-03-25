@@ -62,16 +62,18 @@ def run_simulation(demand, reorder_point, order_qty):
 
     for day in range(num_days):
 
+        # Age inventory
         for layer in inventory_layers:
             layer["age"] += 1
 
+        # Receive orders
         for order in pipeline_orders.copy():
             if order[0] == day:
                 inventory_layers.append({"qty": order[1], "age": 0})
                 pipeline_orders.remove(order)
 
+        # Demand (FIFO)
         remaining = demand[day]
-
         while remaining > 0 and inventory_layers:
             if inventory_layers[0]["qty"] <= remaining:
                 remaining -= inventory_layers[0]["qty"]
@@ -81,7 +83,6 @@ def run_simulation(demand, reorder_point, order_qty):
                 remaining = 0
 
         total_inventory = sum(l["qty"] for l in inventory_layers)
-
         pipeline_qty = sum(q for _, q in pipeline_orders)
         inventory_position = total_inventory + pipeline_qty
 
@@ -94,11 +95,10 @@ def run_simulation(demand, reorder_point, order_qty):
             demand[day], total_inventory, inventory_position, new_order
         ])
 
+        # Aging buckets
         bucket = {"0-30":0, "31-60":0, "61-90":0, "90+":0}
-
         for l in inventory_layers:
             age, qty = l["age"], l["qty"]
-
             if age <= 30:
                 bucket["0-30"] += qty
             elif age <= 60:
@@ -116,11 +116,10 @@ def run_simulation(demand, reorder_point, order_qty):
     ])
 
     aging_df = pd.DataFrame(aging_data)
-
     return df, aging_df
 
 # =========================================================
-# METRICS FUNCTION (FOR OPTIMIZATION)
+# METRICS FUNCTION (FOR EOQ / WC OPTIMIZATION)
 # =========================================================
 def run_simulation_metrics(demand, reorder_point, order_qty):
 
@@ -139,7 +138,6 @@ def run_simulation_metrics(demand, reorder_point, order_qty):
                 pipeline_orders.remove(order)
 
         remaining = demand[day]
-
         while remaining > 0 and inventory_layers:
             if inventory_layers[0]["qty"] <= remaining:
                 remaining -= inventory_layers[0]["qty"]
@@ -182,51 +180,101 @@ else:
     st.info(f"Manual Reorder Point: {reorder_point}")
 
 # =========================================================
-# RUN
+# RUN SIMULATION
 # =========================================================
 df, aging_df = run_simulation(demand, reorder_point, order_qty)
 df["Date"] = pd.date_range("2024-01-01", periods=num_days)
 aging_df["Date"] = df["Date"]
 
 # =========================================================
-# KPI CALCULATIONS
+# KPI CALCULATIONS (FULL)
 # =========================================================
 df["Blocked Working Capital"] = df["Inventory Position"] * unit_value
 df["Inventory Value"] = df["Inventory Position"] * unit_value
 
 stockout_days = (df["Closing Balance"] == 0).sum()
+
 average_inventory = df["Inventory Position"].mean()
 average_age_inventory = average_inventory / df["Demand"].mean()
+
 average_working_capital = df["Blocked Working Capital"].mean()
 
+min_inventory = df["Closing Balance"].min()
+max_inventory = df["Closing Balance"].max()
+
+min_wc = df["Blocked Working Capital"].min()
+max_wc = df["Blocked Working Capital"].max()
+
+df["Holding Cost"] = df["Inventory Value"] * holding_cost_rate / 365
+
+total_holding_cost = df["Holding Cost"].sum()
+number_of_orders = (df["New Order"] > 0).sum()
+total_ordering_cost = number_of_orders * ordering_cost
+total_inventory_cost = total_holding_cost + total_ordering_cost
+
+annual_demand = avg_demand * 365
+holding_cost_per_unit = unit_value * holding_cost_rate
+eoq = int(np.sqrt((2 * annual_demand * ordering_cost) / holding_cost_per_unit))
+
+optimal_wc_eoq = run_simulation_metrics(demand, reorder_point, eoq)
+
+cost_eoq = optimal_wc_eoq * holding_cost_rate + (annual_demand / eoq) * ordering_cost
+
 # =========================================================
-# KPI DISPLAY
+# KPI DISPLAY (FULL)
 # =========================================================
 st.subheader("Inventory KPIs")
 
-c1,c2,c3,c4 = st.columns(4)
+c1, c2, c3, c4 = st.columns(4)
 c1.metric("Stockout Days", stockout_days)
-c2.metric("Average Age", round(average_age_inventory,1))
+c2.metric("Average Age of Inventory", round(average_age_inventory,1))
 c3.metric("Average Inventory", round(average_inventory,0))
 c4.metric("Avg Working Capital", round(average_working_capital,0))
 
+st.subheader("Inventory Range")
+
+r1, r2, r3, r4 = st.columns(4)
+r1.metric("Minimum Inventory", round(min_inventory,0))
+r2.metric("Maximum Inventory", round(max_inventory,0))
+r3.metric("Minimum Working Capital", round(min_wc,0))
+r4.metric("Maximum Working Capital", round(max_wc,0))
+
+st.subheader("Inventory Cost Metrics")
+
+cc1, cc2, cc3 = st.columns(3)
+cc1.metric("Total Holding Cost", round(total_holding_cost,0))
+cc2.metric("Total Ordering Cost", round(total_ordering_cost,0))
+cc3.metric("Total Inventory Cost", round(total_inventory_cost,0))
+
+st.subheader("EOQ")
+
+e1, e2 = st.columns(2)
+e1.metric("Economic Order Quantity", eoq)
+e2.metric("Selected Order Quantity", order_qty)
+
+st.subheader("Cost Comparison")
+
+k1, k2, k3 = st.columns(3)
+k1.metric("Cost with Current Policy", round(total_inventory_cost,0))
+k2.metric("Cost with EOQ", round(cost_eoq,0))
+k3.metric("Savings Using EOQ", round(total_inventory_cost - cost_eoq,0))
+
 # =========================================================
-# INVENTORY CHART
+# INVENTORY BEHAVIOUR
 # =========================================================
 st.subheader("Inventory Behaviour")
 
 fig = go.Figure()
-fig.add_trace(go.Scatter(x=df["Date"], y=df["Closing Balance"]))
+fig.add_trace(go.Scatter(x=df["Date"], y=df["Closing Balance"], name="Inventory"))
 
 fig.add_hline(y=reorder_point, line_dash="dash")
-
 fig.add_hrect(y0=0, y1=reorder_point*0.5, fillcolor="red", opacity=0.1)
 fig.add_hrect(y0=reorder_point*0.5, y1=reorder_point, fillcolor="yellow", opacity=0.1)
 
 st.plotly_chart(fig, use_container_width=True)
 
 # =========================================================
-# WORKING CAPITAL CHART
+# WORKING CAPITAL
 # =========================================================
 st.subheader("Blocked Working Capital")
 
@@ -241,16 +289,10 @@ st.plotly_chart(fig_wc, use_container_width=True)
 st.subheader("💰 Working Capital Optimization")
 
 current_wc = average_working_capital
-
-annual_demand = avg_demand * 365
-holding_cost_per_unit = unit_value * holding_cost_rate
-eoq = int(np.sqrt((2 * annual_demand * ordering_cost) / holding_cost_per_unit))
-
-optimal_wc = run_simulation_metrics(demand, reorder_point, eoq)
-
+optimal_wc = optimal_wc_eoq
 wc_saving = current_wc - optimal_wc
 
-c1,c2,c3 = st.columns(3)
+c1, c2, c3 = st.columns(3)
 c1.metric("Current WC", round(current_wc,0))
 c2.metric("Optimal WC", round(optimal_wc,0))
 c3.metric("Cash Release", round(wc_saving,0))

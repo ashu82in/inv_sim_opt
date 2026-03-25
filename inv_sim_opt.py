@@ -253,7 +253,7 @@ with tab2:
         k3.metric("Avg Annual Cost", f"₹{round(curr_df['total_cost'].mean(), 0)}")
         k4.metric("WC Risk (95th Pctl)", f"₹{round(curr_df['avg_wc'].quantile(0.95), 0)}")
 
-        # --- SECTION 2: STOCKOUT PROBABILITY (Restored & Enhanced) ---
+        # --- SECTION 2: STOCKOUT PROBABILITY (FIXED) ---
         st.write("#### 🛡️ Stockout Risk Probabilities")
         d_1 = round(num_days * 0.01, 1)
         d_5 = round(num_days * 0.05, 1)
@@ -261,21 +261,21 @@ with tab2:
 
         p1, p2, p3, p4 = st.columns(4)
         with p1:
-            val = (curr_df['stockout_days'] == 0).sum() / n_scenarios * 100
-            st.metric("Prob: No Stockouts", f"{round(val, 2)}%")
+            val1 = (curr_df['stockout_days'] == 0).sum() / n_scenarios * 100
+            st.metric("Prob: No Stockouts", f"{round(val1, 2)}%")
             st.caption("Chance of zero stockout days.")
         with p2:
-            val = (curr_df['stockout_days'] < (num_days * 0.01)).sum() / n_scenarios * 100
-            st.metric("Stockouts < 1% Days", f"{round(val, 2)}%")
-            st.caption(f"Less Than {d_1} days in {round(val, 1)}% of cases.")
+            val2 = (curr_df['stockout_days'] < (num_days * 0.01)).sum() / n_scenarios * 100
+            st.metric("Stockouts < 1% Days", f"{round(val2, 2)}%")
+            st.caption(f"Less Than {d_1} days in {round(val2, 1)}% of cases.")
         with p3:
-            val = (curr_df['stockout_days'] < (num_days * 0.05)).sum() / n_scenarios * 100
-            st.metric("Stockouts < 5% Days", f"{round(val, 2)}%")
-            st.caption(f"Less Than {d_5} days in {round(val, 1)}% of cases.")
+            val3 = (curr_df['stockout_days'] < (num_days * 0.05)).sum() / n_scenarios * 100
+            st.metric("Stockouts < 5% Days", f"{round(val3, 2)}%")
+            st.caption(f"Less Than {d_5} days in {round(val3, 1)}% of cases.")
         with p4:
-            val = (curr_df['stockout_days'] < (num_days * 0.10)).sum() / n_scenarios * 100
-            st.metric("Stockouts < 10% Days", f"{round(val, 2)}%")
-            st.caption(f"Less Than {d_10} days in {round(p4, 1)}% of cases.")
+            val4 = (curr_df['stockout_days'] < (num_days * 0.10)).sum() / n_scenarios * 100
+            st.metric("Stockouts < 10% Days", f"{round(val4, 2)}%")
+            st.caption(f"Less Than {d_10} days in {round(val4, 1)}% of cases.")
 
         # --- SECTION 3: SENSITIVITY TABLE (Color Coded) ---
         st.divider()

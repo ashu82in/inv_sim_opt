@@ -13,7 +13,10 @@ st.title("📦 Inventory Policy & Risk Simulator")
 # =========================================================
 # SHARED SIMULATION ENGINE
 # =========================================================
-def run_full_simulation(demand_seq, r_point, q_qty, num_days_sim, open_bal, l_time, val_unit, h_rate, o_cost):
+# =========================================================
+# SHARED SIMULATION ENGINE (FIXED)
+# =========================================================
+def run_full_simulation(demand_seq, r_point, q_qty, num_days_sim, open_bal, l_time, val_unit, h_rate, o_cost, calc_aging=True):
     inventory_layers = [{"qty": open_bal, "age": 0}]
     pipeline_orders = []
     data = []
@@ -51,19 +54,20 @@ def run_full_simulation(demand_seq, r_point, q_qty, num_days_sim, open_bal, l_ti
 
         data.append([demand_seq[day], total_inventory, inventory_position, new_order])
 
-        # Aging buckets
-        bucket = {"0-30":0, "31-60":0, "61-90":0, "90+":0}
-        for l in inventory_layers:
-            age, qty = l["age"], l["qty"]
-            if age <= 30: bucket["0-30"] += qty
-            elif age <= 60: bucket["31-60"] += qty
-            elif age <= 90: bucket["61-90"] += qty
-            else: bucket["90+"] += qty
-        bucket["Day"] = day
-        aging_data.append(bucket)
+        # ONLY calculate aging if calc_aging is True (saves massive time in Tab 2)
+        if calc_aging:
+            bucket = {"0-30":0, "31-60":0, "61-90":0, "90+":0}
+            for l in inventory_layers:
+                age, qty = l["age"], l["qty"]
+                if age <= 30: bucket["0-30"] += qty
+                elif age <= 60: bucket["31-60"] += qty
+                elif age <= 90: bucket["61-90"] += qty
+                else: bucket["90+"] += qty
+            bucket["Day"] = day
+            aging_data.append(bucket)
 
     df = pd.DataFrame(data, columns=["Demand","Closing Balance","Inventory Position","New Order"])
-    aging_df = pd.DataFrame(aging_data)
+    aging_df = pd.DataFrame(aging_data) if calc_aging else pd.DataFrame()
     
     # Core Metrics for Engine
     df["Blocked Working Capital"] = df["Inventory Position"] * val_unit

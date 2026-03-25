@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 from scipy.stats import norm
 
 st.set_page_config(layout="wide")
-st.title("Inventory Policy & Risk Simulator")
+st.title("📦 Inventory Policy & Risk Simulator")
 
 # =========================================================
 # SHARED SIMULATION ENGINE
@@ -63,19 +63,23 @@ def run_full_simulation(demand_seq, r_point, q_qty, num_days_sim, open_bal, l_ti
     df = pd.DataFrame(data, columns=["Demand","Closing Balance","Inventory Position","New Order"])
     aging_df = pd.DataFrame(aging_data)
     
-    # Calculate Summary Metrics for the Engine
-    df["Inventory Value"] = df["Inventory Position"] * val_unit
-    df["Holding Cost"] = df["Inventory Value"] * h_rate / 365
+    # Core Metrics for Engine
+    df["Blocked Working Capital"] = df["Inventory Position"] * val_unit
+    df["Holding Cost"] = df["Blocked Working Capital"] * h_rate / 365
     
     metrics = {
         "stockout_days": (df["Closing Balance"] == 0).sum(),
         "avg_inv": df["Inventory Position"].mean(),
-        "avg_wc": df["Inventory Position"].mean() * val_unit,
+        "avg_wc": df["Blocked Working Capital"].mean(),
         "min_inv": df["Closing Balance"].min(),
         "max_inv": df["Closing Balance"].max(),
-        "total_cost": df["Holding Cost"].sum() + ((df["New Order"] > 0).sum() * o_cost),
+        "min_wc": df["Blocked Working Capital"].min(),
+        "max_wc": df["Blocked Working Capital"].max(),
+        "total_holding": df["Holding Cost"].sum(),
+        "num_orders": (df["New Order"] > 0).sum(),
         "avg_age": df["Inventory Position"].mean() / (demand_seq.mean() if demand_seq.mean() > 0 else 1)
     }
+    metrics["total_cost"] = metrics["total_holding"] + (metrics["num_orders"] * o_cost)
     
     return df, aging_df, metrics
 
@@ -100,10 +104,11 @@ holding_cost_rate = holding_cost_percent / 100
 # =========================================================
 # TABS SETUP
 # =========================================================
-tab1, tab2 = st.tabs(["📊 Single Scenario (Detailed)", "🎲 Monte Carlo Simulation"])
+tab1, tab2 = st.tabs(["📊 Detailed Analysis", "🎲 Monte Carlo Simulation"])
 
 with tab1:
     # --- Policy Input ---
+    st.subheader("Policy Input")
     use_service_level = st.checkbox("Use Service Level", key="use_sl")
     service_level_input = st.slider("Target Service Level", 0.80, 0.99, 0.95, disabled=not use_service_level)
     
@@ -113,7 +118,7 @@ with tab1:
         reorder_point = int(avg_demand*lead_time + z*std_demand*np.sqrt(lead_time))
         st.success(f"Auto Reorder Point: {reorder_point}")
 
-    if st.button("Reset & Run Single Scenario"):
+    if st.button("Reset Demand Scenario"):
         st.session_state.demand_sequence = np.maximum(0, np.random.normal(avg_demand, std_demand, num_days)).round()
 
     if "demand_sequence" not in st.session_state:
@@ -124,7 +129,7 @@ with tab1:
     df["Date"] = pd.date_range("2024-01-01", periods=num_days)
     aging_df["Date"] = df["Date"]
 
-    # --- KPI Dashboards (Restored exactly as per your code) ---
+    # --- KPI DISPLAY (Restored) ---
     st.subheader("Inventory KPIs")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Stockout Days", m['stockout_days'])
@@ -136,54 +141,87 @@ with tab1:
     r1, r2, r3, r4 = st.columns(4)
     r1.metric("Minimum Inventory", round(m['min_inv'], 0))
     r2.metric("Maximum Inventory", round(m['max_inv'], 0))
-    r3.metric("Min Working Capital", round(m['min_inv'] * unit_value, 0))
-    r4.metric("Max Working Capital", round(m['max_inv'] * unit_value, 0))
+    r3.metric("Minimum Working Capital", round(m['min_wc'], 0))
+    r4.metric("Maximum Working Capital", round(m['max_wc'], 0))
+
+    st.subheader("Inventory Cost Metrics")
+    cc1, cc2, cc3 = st.columns(3)
+    cc1.metric("Total Holding Cost", round(m['total_holding'], 0))
+    cc2.metric("Total Ordering Cost", round(m['num_orders'] * ordering_cost, 0))
+    cc3.metric("Total Inventory Cost", round(m['total_cost'], 0))
+
+    # --- EOQ LOGIC (Restored) ---
+    st.subheader("EOQ")
+    annual_demand = avg_demand * 365
+    holding_cost_per_unit = unit_value * holding_cost_rate
+    eoq = int(np.sqrt((2 * annual_demand * ordering_cost) / holding_cost_per_unit))
+    
+    # Quick Simulation for EOQ Comparison
+    _, _, m_eoq = run_full_simulation(st.session_state.demand_sequence, reorder_point, eoq, num_days, opening_balance, lead_time, unit_value, holding_cost_rate, ordering_cost)
+    
+    e1, e2 = st.columns(2)
+    e1.metric("Economic Order Quantity", eoq)
+    e2.metric("Selected Order Quantity", order_qty)
+
+    st.subheader("Cost Comparison")
+    k1, k2, k3 = st.columns(3)
+    k1.metric("Cost with Current Policy", round(m['total_cost'], 0))
+    k2.metric("Cost with EOQ", round(m_eoq['total_cost'], 0))
+    k3.metric("Savings Using EOQ", round(m['total_cost'] - m_eoq['total_cost'], 0))
 
     # --- Charts (Restored) ---
     st.subheader("Inventory Behaviour")
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=df["Date"], y=df["Closing Balance"], name="Inventory"))
     fig.add_hline(y=reorder_point, line_dash="dash")
+    fig.add_hrect(y0=0, y1=reorder_point*0.5, fillcolor="red", opacity=0.1)
+    fig.add_hrect(y0=reorder_point*0.5, y1=reorder_point, fillcolor="yellow", opacity=0.1)
     st.plotly_chart(fig, use_container_width=True)
 
+    st.subheader("Blocked Working Capital")
+    fig_wc = px.line(df, x="Date", y="Blocked Working Capital")
+    fig_wc.add_hline(y=m['avg_wc'], line_dash="dash")
+    st.plotly_chart(fig_wc, use_container_width=True)
+
     st.subheader("Aging Buckets")
-    for col in ["0-30","31-60","61-90","90+"]: aging_df[col] *= unit_value
-    aging_melt = aging_df.melt(id_vars=["Date"], value_vars=["0-30","31-60","61-90","90+"], var_name="Bucket", value_name="Value")
-    fig_bucket = px.bar(aging_melt, x="Date", y="Value", color="Bucket")
+    temp_aging = aging_df.copy()
+    for col in ["0-30","31-60","61-90","90+"]: temp_aging[col] *= unit_value
+    aging_melt = temp_aging.melt(id_vars=["Date"], value_vars=["0-30","31-60","61-90","90+"], var_name="Bucket", value_name="Value")
+    fig_bucket = px.bar(aging_melt, x="Date", y="Value", color="Bucket", color_discrete_map={"0-30":"#ADD8E6","31-60":"#6495ED","61-90":"#FFA07A","90+":"#FF0000"})
     st.plotly_chart(fig_bucket, use_container_width=True)
 
+    st.subheader("Demand Distribution")
+    st.plotly_chart(px.histogram(df, x="Demand"), use_container_width=True)
+
+    # --- Data Table Toggle (Restored) ---
+    if st.checkbox("Show Simulation Data"):
+        st.subheader("Simulation Data")
+        st.dataframe(df)
+
 with tab2:
-    st.subheader("Multi-Scenario Simulation")
+    st.subheader("🎲 Monte Carlo Risk Simulation")
     n_scenarios = st.number_input("Number of Scenarios", 10, 500, 100)
     
-    if st.button("Run Monte Carlo"):
+    if st.button("Run Monte Carlo Analysis"):
         all_results = []
         progress_bar = st.progress(0)
         
         for i in range(n_scenarios):
-            # Generate fresh random demand for each scenario
             scen_demand = np.maximum(0, np.random.normal(avg_demand, std_demand, num_days)).round()
             _, _, metrics = run_full_simulation(scen_demand, reorder_point, order_qty, num_days, opening_balance, lead_time, unit_value, holding_cost_rate, ordering_cost)
             all_results.append(metrics)
             progress_bar.progress((i + 1) / n_scenarios)
         
-        results_df = pd.DataFrame(all_results)
+        res_df = pd.DataFrame(all_results)
         
-        # --- Monte Carlo Visualizations ---
+        # Risk Distributions
         col1, col2 = st.columns(2)
         with col1:
-            st.write("### Total Inventory Cost Distribution")
-            st.plotly_chart(px.histogram(results_df, x="total_cost", nbins=20, color_discrete_sequence=['indianred']), use_container_width=True)
-            
-            st.write("### Average Working Capital Distribution")
-            st.plotly_chart(px.histogram(results_df, x="avg_wc", nbins=20, color_discrete_sequence=['royalblue']), use_container_width=True)
-
+            st.plotly_chart(px.histogram(res_df, x="total_cost", title="Total Inventory Cost Distribution", color_discrete_sequence=['indianred']), use_container_width=True)
+            st.plotly_chart(px.histogram(res_df, x="avg_wc", title="Avg Working Capital Distribution", color_discrete_sequence=['royalblue']), use_container_width=True)
         with col2:
-            st.write("### Stockout Days Distribution")
-            st.plotly_chart(px.histogram(results_df, x="stockout_days", nbins=15, color_discrete_sequence=['orange']), use_container_width=True)
+            st.plotly_chart(px.histogram(res_df, x="stockout_days", title="Stockout Days Distribution", color_discrete_sequence=['orange']), use_container_width=True)
+            st.plotly_chart(px.histogram(res_df, x="min_inv", title="Minimum Inventory Distribution", color_discrete_sequence=['green']), use_container_width=True)
 
-            st.write("### Minimum Inventory Distribution")
-            st.plotly_chart(px.histogram(results_df, x="min_inv", nbins=15, color_discrete_sequence=['green']), use_container_width=True)
-
-        st.write("### Risk Summary Statistics")
-        st.dataframe(results_df.describe().T)
+        st.write("### Summary of Risk Outcomes")
+        st.dataframe(res_df[["total_cost", "avg_wc", "stockout_days", "avg_age", "min_inv"]].describe().T)

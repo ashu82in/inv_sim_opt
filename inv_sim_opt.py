@@ -291,7 +291,26 @@ with tab2:
             "avg_wc": "mean"
         })
         sens_table.columns = ["Avg Stockout Days", "Prob: No Stockout (%)", "Avg Cost (₹)", "Avg Working Capital (₹)"]
-        st.table(sens_table.style.format("{:.2f}").highlight_max(axis=0, color='#ffcccc'))
+        # st.table(sens_table.style.format("{:.2f}").highlight_max(axis=0, color='#ffcccc'))
+        # --- Lead Time Sensitivity Table with Color Coding ---
+        st.write("### 📋 Lead Time Sensitivity Table")
+        
+        # Define the summary table
+        sens_table = res_df.groupby("Tested LT").agg({
+            "stockout_days": ["mean", lambda x: (x == 0).sum() / n_scenarios * 100],
+            "total_cost": "mean",
+            "avg_wc": "mean"
+        })
+        sens_table.columns = ["Avg Stockout Days", "Prob: No Stockout (%)", "Avg Cost (₹)", "Avg Working Capital (₹)"]
+        
+        # Apply Logic-Based Highlighting
+        styled_table = sens_table.style.format("{:.2f}")\
+            .highlight_max(subset=["Avg Stockout Days", "Avg Cost (₹)", "Avg Working Capital (₹)"], color='#ffcccc')\
+            .highlight_min(subset=["Avg Stockout Days", "Avg Cost (₹)", "Avg Working Capital (₹)"], color='#ccffcc')\
+            .highlight_max(subset=["Prob: No Stockout (%)"], color='#ccffcc')\
+            .highlight_min(subset=["Prob: No Stockout (%)"], color='#ffcccc')
+
+        st.table(styled_table)
 
         # =========================================================
         # 📈 RISK DISTRIBUTIONS (ALL 4 CHARTS)

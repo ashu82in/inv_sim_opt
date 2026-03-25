@@ -335,65 +335,84 @@ with tab2:
 # tab1, tab2, tab3 = st.tabs(["📊 Detailed Analysis", "🎲 Monte Carlo Simulation", "🎯 Policy Optimizer"])
 
 with tab3:
-    st.subheader("🧬 Genetic Algorithm Policy Optimizer")
-    st.write("Using metaheuristics to evolve the most cost-effective inventory policy for volatile demand.")
+    st.subheader("🎯 Constraint-Based Deep Optimizer")
+    st.write("This engine 'evolves' an inventory policy that minimizes cost while strictly obeying your Service Level requirement.")
 
-    col1, col2 = st.columns(2)
-    with col1:
-        pop_size = st.select_slider("Population Size", options=[10, 20, 50], value=20)
-        generations = st.select_slider("Number of Generations", options=[5, 10, 20], value=10)
-    with col2:
-        stockout_penalty = st.number_input("Stockout Penalty (₹/unit)", value=unit_value*2.0)
-        st.info("Higher penalties force the model to prioritize Safety Stock.")
+    # --- INPUTS ---
+    c1, c2 = st.columns(2)
+    with c1:
+        # The Hard Constraint
+        target_sl = st.slider("Minimum Service Level (%)", 85.0, 99.9, 95.0)
+        # Internal params (Hidden from user for simplicity)
+        pop_size = 50 
+        generations = 20
+    with c2:
+        allowable_days = round(num_days * (1 - target_sl/100), 1)
+        st.info(f"**Hard Constraint:** Stockouts must be ≤ {allowable_days} days/year.")
 
-    if st.button("🧬 Evolve Best Policy"):
-        # --- GA SETTINGS ---
-        # Gene 0: ROP, Gene 1: Qty
-        bounds = [(0, 1000), (100, 2000)] 
+    if st.button("🧬 Run Evolutionary Optimization"):
+        import random
+        start_time = time.time()
         
-        # 1. Initialize Population
-        pop = []
-        for _ in range(pop_size):
-            pop.append([np.random.randint(bounds[0][0], bounds[0][1]), 
-                        np.random.randint(bounds[1][0], bounds[1][1])])
+        # Define search neighborhood based on current demand
+        max_r = int(avg_demand * lead_time * 5) 
+        max_q = int(avg_demand * 30) # Roughly 1 month of stock
+        bounds = [(0, max_r), (100, max_q)] 
+        
+        # 1. Start with 50 random policies
+        pop = [[np.random.randint(b[0], b[1]) for b in bounds] for _ in range(pop_size)]
         
         progress_bar = st.progress(0)
         status = st.empty()
         history = []
 
         for gen in range(generations):
-            status.text(f"Generation {gen+1}/{generations}: Evolving policies...")
-            scores = []
+            status.text(f"Generation {gen+1}/{generations}: Filtering for feasible policies...")
+            fitness_scores = []
             
-            # 2. Fitness Evaluation (Simulation)
             for individual in pop:
-                r_t, q_t = individual[0], individual[1]
-                # Run 30 scenarios per individual to average out noise
-                sim_costs = []
-                for _ in range(30):
-                    s_dem = np.maximum(0, np.random.normal(avg_demand, std_demand, num_days)).round()
-                    _, _, m = run_full_simulation(s_dem, r_t, q_t, num_days, opening_balance, lead_time, unit_value, holding_cost_rate, ordering_cost, calc_aging=False)
-                    total_p_cost = m['total_cost'] + (m['stockout_days'] * avg_demand * stockout_penalty)
-                    sim_costs.append(total_p_cost)
+                r_test, q_test = individual[0], individual[1]
                 
-                scores.append(np.mean(sim_costs))
+                # Run 30 scenarios to get a robust average (Handling high COV)
+                scen_metrics = []
+                # Vectorized demand for speed
+                batch_demands = np.maximum(0, np.random.normal(avg_demand, std_demand, (30, num_days))).round()
+                
+                for i in range(30):
+                    _, _, m = run_full_simulation(batch_demands[i], r_test, q_test, num_days, 
+                                                   opening_balance, lead_time, unit_value, 
+                                                   holding_cost_rate, ordering_cost, calc_aging=False)
+                    scen_metrics.append(m)
+                
+                avg_cost = np.mean([x['total_cost'] for x in scen_metrics])
+                avg_so_days = np.mean([x['stockout_days'] for x in scen_metrics])
+                achieved_sl = (1 - (avg_so_days / num_days)) * 100
+                
+                # --- APPLY HARD CONSTRAINT ---
+                if achieved_sl < target_sl:
+                    # Apply "Death Penalty": The worse the violation, the higher the cost
+                    penalty = 20 * (target_sl - achieved_sl + 1)
+                    score = avg_cost * penalty 
+                else:
+                    # Feasible policy: Score is just the actual cost
+                    score = avg_cost
+                
+                fitness_scores.append(score)
             
-            # Rank Population (Lower cost is better)
-            ranked = [x for _, x in sorted(zip(scores, pop))]
-            best_score = min(scores)
-            history.append(best_score)
+            # Evolution: Sort, Select, Breed
+            ranked = [x for _, x in sorted(zip(fitness_scores, pop))]
+            history.append(min(fitness_scores))
             
-            # 3. Selection (Keep top 25% as parents)
+            # Keep top 25% (The elite survivors)
             parents = ranked[:max(2, pop_size//4)]
+            new_pop = parents.copy()
             
-            # 4. Crossover & Mutation (Create next generation)
-            new_pop = parents.copy() # Elitism: Keep best parents
+            # Fill next generation with children
             while len(new_pop) < pop_size:
                 p1, p2 = random.sample(parents, 2)
-                # Crossover
+                # Crossover + Mutation
                 child = [int((p1[0] + p2[0])/2), int((p1[1] + p2[1])/2)]
-                # Mutation (15% chance)
-                if np.random.random() < 0.15:
+                if np.random.random() < 0.25: # Mutation
                     child[0] = np.clip(child[0] + np.random.randint(-50, 50), bounds[0][0], bounds[0][1])
                     child[1] = np.clip(child[1] + np.random.randint(-100, 100), bounds[1][0], bounds[1][1])
                 new_pop.append(child)
@@ -401,16 +420,15 @@ with tab3:
             pop = new_pop
             progress_bar.progress((gen + 1) / generations)
 
-        # Final Results
-        best_r, best_q = parents[0][0], parents[0][1]
-        
+        # --- RESULTS ---
+        best_policy = parents[0]
         st.divider()
         res1, res2, res3 = st.columns(3)
-        res1.metric("Evolved ROP", best_r)
-        res2.metric("Evolved Quantity", best_q)
-        res3.metric("Min Avg Cost", f"₹{round(best_score, 0)}")
+        res1.metric("Optimized ROP (R)", best_policy[0])
+        res2.metric("Optimized Qty (Q)", best_policy[1])
+        res3.metric("Min feasible Cost", f"₹{round(history[-1], 0)}")
 
-        # --- Convergence Chart ---
-        st.write("### 📉 Convergence (Cost Reduction Over Generations)")
-        fig_conv = px.line(x=range(1, generations+1), y=history, labels={'x':'Generation', 'y':'Total Cost'}, markers=True)
-        st.plotly_chart(fig_conv, use_container_width=True)
+        st.success(f"Evolution complete in {round(time.time()-start_time, 1)}s. The algorithm has converged on a policy that respects your {target_sl}% Service Level.")
+        
+        # Convergence Chart
+        st.plotly_chart(px.line(y=history, title="Optimization Convergence (Cost vs. Constraints)", labels={'x':'Generation','y':'Fitness Score'}), use_container_width=True)

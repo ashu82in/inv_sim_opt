@@ -3,7 +3,9 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
+import time
 from scipy.stats import norm
+
 
 st.set_page_config(layout="wide")
 st.title("📦 Inventory Policy & Risk Simulator")

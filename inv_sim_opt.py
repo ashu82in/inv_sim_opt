@@ -335,31 +335,32 @@ with tab2:
 # tab1, tab2, tab3 = st.tabs(["📊 Detailed Analysis", "🎲 Monte Carlo Simulation", "🎯 Policy Optimizer"])
 
 with tab3:
-    st.subheader("🎯 Constraint-Based Deep Optimizer")
-    st.write("This engine 'evolves' an inventory policy that minimizes cost while strictly obeying your Service Level requirement.")
+    st.subheader("🎯 Dual-Constraint Policy Optimizer")
+    st.write("This engine evolves a policy that minimizes costs while strictly obeying two constraints: **Fill Rate** and **Stockout Duration**.")
 
-    # --- INPUTS ---
+    # --- DUAL CONSTRAINT INPUTS ---
     c1, c2 = st.columns(2)
     with c1:
-        # The Hard Constraint
-        target_sl = st.slider("Minimum Service Level (%)", 85.0, 99.9, 95.0)
-        # Internal params (Hidden from user for simplicity)
+        target_fill_rate = st.slider("Min Fill Rate (%)", 85.0, 99.9, 98.0, 
+                                     help="Percentage of total demand volume that must be met.")
+        target_so_days = st.number_input("Max Allowable Stockout Days", value=7, 
+                                         help="The maximum number of days per year the product can be out of stock.")
+    with c2:
+        st.info(f"**Goal:** Meet {target_fill_rate}% of demand AND stay under {target_so_days} days of stockouts.")
+        # Hidden GA Params
         pop_size = 50 
         generations = 20
-    with c2:
-        allowable_days = round(num_days * (1 - target_sl/100), 1)
-        st.info(f"**Hard Constraint:** Stockouts must be ≤ {allowable_days} days/year.")
 
-    if st.button("🧬 Run Evolutionary Optimization"):
+    if st.button("🧬 Run Dual-Constraint Optimization"):
         import random
         start_time = time.time()
         
-        # Define search neighborhood based on current demand
+        # Define search neighborhood
         max_r = int(avg_demand * lead_time * 5) 
-        max_q = int(avg_demand * 30) # Roughly 1 month of stock
+        max_q = int(avg_demand * 45) # Approx 1.5 months
         bounds = [(0, max_r), (100, max_q)] 
         
-        # 1. Start with 50 random policies
+        # 1. Initialize Population
         pop = [[np.random.randint(b[0], b[1]) for b in bounds] for _ in range(pop_size)]
         
         progress_bar = st.progress(0)
@@ -367,34 +368,49 @@ with tab3:
         history = []
 
         for gen in range(generations):
-            status.text(f"Generation {gen+1}/{generations}: Filtering for feasible policies...")
+            status.text(f"Generation {gen+1}/{generations}: Evaluating feasibility...")
             fitness_scores = []
             
             for individual in pop:
                 r_test, q_test = individual[0], individual[1]
                 
-                # Run 30 scenarios to get a robust average (Handling high COV)
+                # Run 30 scenarios for a robust average
                 scen_metrics = []
-                # Vectorized demand for speed
                 batch_demands = np.maximum(0, np.random.normal(avg_demand, std_demand, (30, num_days))).round()
                 
                 for i in range(30):
-                    _, _, m = run_full_simulation(batch_demands[i], r_test, q_test, num_days, 
-                                                   opening_balance, lead_time, unit_value, 
-                                                   holding_cost_rate, ordering_cost, calc_aging=False)
+                    # We need the full DF here to calculate Fill Rate (Sum of Demand vs Sum of Sales)
+                    df_sim, _, m = run_full_simulation(batch_demands[i], r_test, q_test, num_days, 
+                                                       opening_balance, lead_time, unit_value, 
+                                                       holding_cost_rate, ordering_cost, calc_aging=False)
+                    
+                    # Calculate Fill Rate for this specific scenario
+                    total_demand = df_sim["Demand"].sum()
+                    # Sales = Demand - (Unmet Demand if stock is 0)
+                    # For simplicity in this engine: Sales = Demand if Closing Balance > 0
+                    # A more accurate way:
+                    actual_sales = total_demand - (df_sim[df_sim["Closing Balance"] == 0]["Demand"].sum())
+                    fill_rate = (actual_sales / total_demand) * 100 if total_demand > 0 else 100
+                    
+                    m['fill_rate'] = fill_rate
                     scen_metrics.append(m)
                 
+                # Average performance across 30 scenarios
                 avg_cost = np.mean([x['total_cost'] for x in scen_metrics])
                 avg_so_days = np.mean([x['stockout_days'] for x in scen_metrics])
-                achieved_sl = (1 - (avg_so_days / num_days)) * 100
+                avg_fill_rate = np.mean([x['fill_rate'] for x in scen_metrics])
                 
-                # --- APPLY HARD CONSTRAINT ---
-                if achieved_sl < target_sl:
-                    # Apply "Death Penalty": The worse the violation, the higher the cost
-                    penalty = 20 * (target_sl - achieved_sl + 1)
-                    score = avg_cost * penalty 
+                # --- DUAL CONSTRAINT LOGIC ---
+                is_feasible = (avg_fill_rate >= target_fill_rate) and (avg_so_days <= target_so_days)
+                
+                if not is_feasible:
+                    # Apply "Death Penalty" based on the severity of the worst violation
+                    fr_gap = max(0, target_fill_rate - avg_fill_rate)
+                    so_gap = max(0, avg_so_days - target_so_days)
+                    # Score becomes massive so this individual doesn't survive
+                    score = avg_cost * 50 * (fr_gap + so_gap + 1)
                 else:
-                    # Feasible policy: Score is just the actual cost
+                    # Feasible: Score is just the actual inventory cost
                     score = avg_cost
                 
                 fitness_scores.append(score)
@@ -402,17 +418,13 @@ with tab3:
             # Evolution: Sort, Select, Breed
             ranked = [x for _, x in sorted(zip(fitness_scores, pop))]
             history.append(min(fitness_scores))
-            
-            # Keep top 25% (The elite survivors)
             parents = ranked[:max(2, pop_size//4)]
             new_pop = parents.copy()
             
-            # Fill next generation with children
             while len(new_pop) < pop_size:
                 p1, p2 = random.sample(parents, 2)
-                # Crossover + Mutation
                 child = [int((p1[0] + p2[0])/2), int((p1[1] + p2[1])/2)]
-                if np.random.random() < 0.25: # Mutation
+                if np.random.random() < 0.25:
                     child[0] = np.clip(child[0] + np.random.randint(-50, 50), bounds[0][0], bounds[0][1])
                     child[1] = np.clip(child[1] + np.random.randint(-100, 100), bounds[1][0], bounds[1][1])
                 new_pop.append(child)
@@ -420,15 +432,12 @@ with tab3:
             pop = new_pop
             progress_bar.progress((gen + 1) / generations)
 
-        # --- RESULTS ---
+        # --- FINAL RESULTS ---
         best_policy = parents[0]
         st.divider()
         res1, res2, res3 = st.columns(3)
         res1.metric("Optimized ROP (R)", best_policy[0])
         res2.metric("Optimized Qty (Q)", best_policy[1])
-        res3.metric("Min feasible Cost", f"₹{round(history[-1], 0)}")
+        res3.metric("Feasible Policy Cost", f"₹{round(history[-1], 0)}")
 
-        st.success(f"Evolution complete in {round(time.time()-start_time, 1)}s. The algorithm has converged on a policy that respects your {target_sl}% Service Level.")
-        
-        # Convergence Chart
-        st.plotly_chart(px.line(y=history, title="Optimization Convergence (Cost vs. Constraints)", labels={'x':'Generation','y':'Fitness Score'}), use_container_width=True)
+        st.success(f"Evolution complete! The algorithm found a policy that respects both your Fill Rate and Stockout Day limits.")

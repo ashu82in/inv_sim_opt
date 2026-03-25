@@ -225,7 +225,6 @@ with tab2:
             all_demands = np.maximum(0, np.random.normal(avg_demand, std_demand, (n_scenarios, num_days))).round()
             
             for i in range(n_scenarios):
-                # Run sim and calculate Fill Rate manually
                 df_sim, _, metrics = run_full_simulation(
                     all_demands[i], reorder_point, order_qty, num_days, 
                     opening_balance, lt_val, unit_value, 
@@ -245,53 +244,87 @@ with tab2:
         
         st.success(f"Simulated {len(res_df):,} total paths in {round(time.time()-start_time, 2)}s.")
 
-        # --- Fill Rate & Stockout KPIs ---
-        st.write("### 📊 Service Level & Risk Metrics (Current Policy)")
-        k_fr, k_so, k_cost = st.columns(3)
-        
+        # --- SECTION 1: CORE KPIs ---
+        st.write("### 📊 Service Level & Financial Summary")
+        k1, k2, k3, k4 = st.columns(4)
         avg_fr = curr_df['fill_rate'].mean()
-        k_fr.metric("Avg Fill Rate", f"{round(avg_fr, 2)}%")
-        # Explanation for Fill Rate
-        with k_fr: st.caption(f"On average, you fulfill {round(avg_fr, 1)}% of total customer demand volume.")
-        
-        avg_so = curr_df['stockout_days'].mean()
-        k_so.metric("Avg Stockout Days", f"{round(avg_so, 1)} Days")
-        with k_so: st.caption(f"Expect to be out of stock for {round(avg_so, 1)} days per year.")
-        
-        k_cost.metric("Avg Annual Cost", f"₹{round(curr_df['total_cost'].mean(), 0)}")
+        k1.metric("Avg Fill Rate", f"{round(avg_fr, 2)}%")
+        k2.metric("Avg Stockout Days", f"{round(curr_df['stockout_days'].mean(), 1)}")
+        k3.metric("Avg Annual Cost", f"₹{round(curr_df['total_cost'].mean(), 0)}")
+        k4.metric("WC Risk (95th Pctl)", f"₹{round(curr_df['avg_wc'].quantile(0.95), 0)}")
 
-        # --- Fill Rate Probability Row ---
-        st.write("#### Fill Rate Probability")
-        f1, f2, f3 = st.columns(3)
-        f1.metric("Prob: Fill Rate > 99%", f"{round((curr_df['fill_rate'] >= 99).sum()/n_scenarios*100, 1)}%")
-        f2.metric("Prob: Fill Rate > 95%", f"{round((curr_df['fill_rate'] >= 95).sum()/n_scenarios*100, 1)}%")
-        f3.metric("Worst Case Fill Rate", f"{round(curr_df['fill_rate'].min(), 1)}%")
+        # --- SECTION 2: STOCKOUT PROBABILITY (Restored & Enhanced) ---
+        st.write("#### 🛡️ Stockout Risk Probabilities")
+        d_1 = round(num_days * 0.01, 1)
+        d_5 = round(num_days * 0.05, 1)
+        d_10 = round(num_days * 0.10, 1)
 
-        # --- Charts ---
+        p1, p2, p3, p4 = st.columns(4)
+        with p1:
+            val = (curr_df['stockout_days'] == 0).sum() / n_scenarios * 100
+            st.metric("Prob: No Stockouts", f"{round(val, 2)}%")
+            st.caption("Chance of zero stockout days.")
+        with p2:
+            val = (curr_df['stockout_days'] < (num_days * 0.01)).sum() / n_scenarios * 100
+            st.metric("Stockouts < 1% Days", f"{round(val, 2)}%")
+            st.caption(f"Less Than {d_1} days in {round(val, 1)}% of cases.")
+        with p3:
+            val = (curr_df['stockout_days'] < (num_days * 0.05)).sum() / n_scenarios * 100
+            st.metric("Stockouts < 5% Days", f"{round(val, 2)}%")
+            st.caption(f"Less Than {d_5} days in {round(val, 1)}% of cases.")
+        with p4:
+            val = (curr_df['stockout_days'] < (num_days * 0.10)).sum() / n_scenarios * 100
+            st.metric("Stockouts < 10% Days", f"{round(val, 2)}%")
+            st.caption(f"Less Than {d_10} days in {round(p4, 1)}% of cases.")
+
+        # --- SECTION 3: SENSITIVITY TABLE (Color Coded) ---
         st.divider()
-        st.write("### 📈 Risk Distributions")
-        
-        c1, c2 = st.columns(2)
-        with c1:
-            # NEW: Fill Rate Distribution
-            fig_fr = px.histogram(curr_df, x="fill_rate", title="Fill Rate Frequency (Volume Met %)", 
-                                  color_discrete_sequence=['#00CC96'], nbins=30)
-            fig_fr.add_vline(x=avg_fr, line_dash="dash", annotation_text="Average")
-            st.plotly_chart(fig_fr, use_container_width=True)
-            
-        with c2:
-            st.plotly_chart(px.histogram(curr_df, x="stockout_days", title="Stockout Days Frequency", 
-                                         color_discrete_sequence=['#FFA15A']), use_container_width=True)
-
-        # --- Sensitivity Table Update ---
         st.write("### 📋 Lead Time Sensitivity Table")
         sens_table = res_df.groupby("Tested LT").agg({
             "fill_rate": "mean",
             "stockout_days": "mean",
-            "total_cost": "mean"
+            "total_cost": "mean",
+            "avg_wc": "mean"
         })
-        sens_table.columns = ["Avg Fill Rate (%)", "Avg Stockout Days", "Avg Total Cost (₹)"]
-        st.table(sens_table.style.format("{:.2f}").highlight_max(subset=["Avg Stockout Days", "Avg Total Cost (₹)"], color='#ffcccc').highlight_min(subset=["Avg Fill Rate (%)"], color='#ffcccc'))
+        sens_table.columns = ["Avg Fill Rate (%)", "Avg Stockout Days", "Avg Cost (₹)", "Avg Working Capital (₹)"]
+        
+        color_bad = 'background-color: #FF4B4B; color: black; font-weight: bold'
+        color_good = 'background-color: #228B22; color: white; font-weight: bold'
+        
+        styled_sens = sens_table.style.format("{:.2f}")\
+            .highlight_max(subset=["Avg Stockout Days", "Avg Cost (₹)", "Avg Working Capital (₹)"], props=color_bad)\
+            .highlight_min(subset=["Avg Stockout Days", "Avg Cost (₹)", "Avg Working Capital (₹)"], props=color_good)\
+            .highlight_max(subset=["Avg Fill Rate (%)"], props=color_good)\
+            .highlight_min(subset=["Avg Fill Rate (%)"], props=color_bad)
+        st.table(styled_sens)
+
+        # --- SECTION 4: ALL 4 RISK DISTRIBUTIONS (Restored) ---
+        st.divider()
+        st.write("### 📈 Risk Distributions")
+        
+        row1_col1, row1_col2 = st.columns(2)
+        with row1_col1:
+            # Fill Rate Distribution
+            fig_fr = px.histogram(curr_df, x="fill_rate", title="Fill Rate Distribution (Service Level)", color_discrete_sequence=['#00CC96'])
+            st.plotly_chart(fig_fr, use_container_width=True)
+        with row1_col2:
+            # Cost Distribution
+            fig_cost = px.histogram(curr_df, x="total_cost", title="Total Inventory Cost Distribution", color_discrete_sequence=['#EF553B'])
+            st.plotly_chart(fig_cost, use_container_width=True)
+
+        row2_col1, row2_col2 = st.columns(2)
+        with row2_col1:
+            # Stockout Severity
+            fig_so = px.histogram(curr_df, x="stockout_days", title="Stockout Severity Distribution", color_discrete_sequence=['#FFA15A'])
+            st.plotly_chart(fig_so, use_container_width=True)
+        with row2_col2:
+            # Avg Inventory
+            fig_inv = px.histogram(curr_df, x="avg_inv", title="Average Inventory Level Distribution", color_discrete_sequence=['#636EFA'])
+            st.plotly_chart(fig_inv, use_container_width=True)
+
+        with st.expander("View Raw Statistical Data"):
+            st.dataframe(curr_df.describe().T)
+
 
 with tab3:
     st.subheader("🎯 Stochastic Chance-Constrained Optimizer")

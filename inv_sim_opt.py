@@ -328,3 +328,88 @@ with tab2:
         # Statistical Summary Table
         with st.expander("View Full Statistical Raw Data"):
             st.dataframe(curr_df.describe().T)
+
+
+# Add "Optimization" to the tabs setup line: 
+# tab1, tab2, tab3 = st.tabs(["📊 Detailed Analysis", "🎲 Monte Carlo Simulation", "🎯 Policy Optimizer"])
+
+with tab3:
+    st.subheader("🎯 Inventory Policy Optimizer")
+    st.write("This tool calculates the mathematically 'perfect' policy to balance stockout risk against capital costs.")
+
+    col_opt1, col_opt2 = st.columns(2)
+    
+    with col_opt1:
+        st.write("### 1. Define Target Service Level")
+        opt_service_level = st.slider("Target Service Level (%)", 80.0, 99.9, 95.0, help="The probability that you will NOT run out of stock during the lead time.")
+        
+        # Math for ROP
+        z_score = norm.ppf(opt_service_level / 100)
+        safety_stock = z_score * std_demand * np.sqrt(lead_time)
+        cycle_stock = avg_demand * lead_time
+        optimized_rop = int(cycle_stock + safety_stock)
+        
+    with col_opt2:
+        st.write("### 2. Economic Order Quantity (EOQ)")
+        # Annualizing demand for the EOQ formula
+        annual_demand = avg_demand * 365
+        annual_holding_cost_per_unit = unit_value * holding_cost_rate
+        
+        # EOQ Formula: sqrt((2 * Demand * Setup Cost) / Holding Cost)
+        optimized_q = int(np.sqrt((2 * annual_demand * ordering_cost) / annual_holding_cost_per_unit))
+        
+        st.write(f"**Annual Demand:** {annual_demand:,} units")
+        st.write(f"**Holding Cost/Unit/Year:** ₹{annual_holding_cost_per_unit}")
+
+    st.divider()
+    
+    # --- PROPOSED POLICY DASHBOARD ---
+    st.write("### 🛠️ Proposed Optimized Policy")
+    res1, res2, res3 = st.columns(3)
+    
+    res1.metric("Optimized Reorder Point", optimized_rop, 
+               delta=int(optimized_rop - reorder_point_input), 
+               delta_color="inverse")
+    
+    res2.metric("Optimized Order Quantity", optimized_q, 
+               delta=int(optimized_q - order_qty), 
+               delta_color="inverse")
+    
+    res3.metric("Safety Stock Level", int(safety_stock))
+
+    # --- VALIDATION RUN ---
+    st.divider()
+    st.write("### 🧪 Simulation Validation")
+    st.write("Running 1,000 scenarios with this optimized policy to verify performance...")
+
+    if st.button("Verify Optimized Policy"):
+        val_results = []
+        # Run 1000 scenarios with the NEW suggested ROP and Q
+        v_demands = np.maximum(0, np.random.normal(avg_demand, std_demand, (1000, num_days))).round()
+        
+        for i in range(1000):
+            _, _, v_m = run_full_simulation(
+                v_demands[i], optimized_rop, optimized_q, num_days, 
+                opening_balance, lead_time, unit_value, 
+                holding_cost_rate, ordering_cost, calc_aging=False
+            )
+            val_results.append(v_m)
+            
+        v_df = pd.DataFrame(val_results)
+        
+        # Results
+        vc1, vc2, vc3 = st.columns(3)
+        actual_sl = (v_df['stockout_days'] == 0).sum() / 1000 * 100
+        
+        vc1.metric("Achieved Service Level", f"{round(actual_sl, 1)}%")
+        vc2.metric("Predicted Annual Cost", f"₹{round(v_df['total_cost'].mean(), 0)}")
+        vc3.metric("Avg Working Capital", f"₹{round(v_df['avg_wc'].mean(), 0)}")
+        
+        if actual_sl >= opt_service_level:
+            st.success(f"✅ The optimized policy meets your {opt_service_level}% target!")
+        else:
+            st.warning(f"⚠️ Actual Service Level ({round(actual_sl,1)}%) is slightly lower than target. Consider increasing the Reorder Point manually.")
+
+        # Comparison Chart
+        st.write("#### Cost Distribution of Optimized Policy")
+        st.plotly_chart(px.histogram(v_df, x="total_cost", color_discrete_sequence=['#228B22']), use_container_width=True)

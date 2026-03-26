@@ -343,7 +343,7 @@ with tab3:
         # Metaheuristic params
         pop_size = 12 
         generations = 8 
-        scenarios_per_test = 1000  # Note: Lowered to 1k for UI speed; 10k can be set for 'Deep Production' runs
+        scenarios_per_test = 2000  # Note: Lowered to 1k for UI speed; 10k can be set for 'Deep Production' runs
 
     if st.button("🚀 Run Stochastic Optimization"):
         import random

@@ -953,7 +953,7 @@ with tab4:
     st.write("Compare your **Manual Policy** against the **AI Optimized Policy** under 10,000 extreme scenarios.")
 
     # 1. SESSION STATE BRIDGE
-    if 'best_policy' not in st.session_state:
+    if st.session_state.best_policy is None:
         st.warning("⚠️ No Optimized Policy found. Please run the AI Optimizer in Tab 3 first.")
         st.stop()
     else:

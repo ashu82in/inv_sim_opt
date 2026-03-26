@@ -119,7 +119,7 @@ holding_cost_rate = holding_cost_percent / 100
 # =========================================================
 # TABS SETUP
 # =========================================================
-tab1, tab2, tab3 = st.tabs(["📊 Detailed Analysis", "🎲 Monte Carlo Simulation", "🎯 Policy Optimizer"])
+tab1, tab2, tab3, tab4 = st.tabs(["📊 Detailed Analysis", "🎲 Monte Carlo Simulation", "🎯 Policy Optimizer", "Final Results"])
 
 with tab1:
     # --- Policy Input ---

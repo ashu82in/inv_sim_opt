@@ -656,134 +656,57 @@ with tab3:
 
 with tab4:
     st.header("🛡️ Strategy Validation & Impact")
-    st.write("Compare your **Manual Policy** against the **AI Optimized Policy** under 10,000 extreme scenarios.")
-
-    # 1. RETRIEVE OPTIMIZED VALUES FROM TAB 3
-    if 'best_policy' not in st.session_state or st.session_state.best_policy is None:
-        st.warning("⚠️ No Optimized Policy found. Please run the Optimizer in Tab 3 first.")
-        opt_r, opt_q = 0, 0
-    else:
-        opt_r, opt_q = st.session_state.best_policy
-
-    # 2. THE SIMULATION BUTTON
-    if st.button("🏁 Run Final 10,000 Scenario Stress Test"):
-        with st.status("Simulating 10,000 'Worst-Case' Scenarios...", expanded=True) as status:
-            n_stress = 10000
-            stress_demands = np.maximum(0, np.random.normal(avg_demand, std_demand, (n_stress, num_days))).round()
-            
-            def run_stress_sim(r, q):
-                inv = np.full(n_stress, opening_balance, dtype=float)
-                arr = np.full(n_stress, -1)
-                so, unmet, h_cost, orders = [np.zeros(n_stress) for _ in range(4)]
-                scenario_peaks = np.zeros(n_stress)
-                
-                for d in range(num_days):
-                    mask_arr = (arr == d)
-                    inv[mask_arr] += q
-                    arr[mask_arr] = -1
-                    
-                    d_t = stress_demands[:, d]
-                    short = np.maximum(0, d_t - inv)
-                    so[short > 0] += 1
-                    unmet += short
-                    
-                    inv = np.maximum(0, inv - d_t)
-                    h_cost += (inv * (unit_value * holding_cost_rate / 365))
-                    scenario_peaks = np.maximum(scenario_peaks, inv)
-                    
-                    mask_re = (inv <= r) & (arr == -1)
-                    arr[mask_re] = d + lead_time
-                    orders[mask_re] += 1
-                
-                fr = (1 - (unmet / stress_demands.sum(axis=1))) * 100
-                total_c = h_cost + (orders * ordering_cost)
-                
-                return {
-                    "fr_raw": fr, "avg_fr": fr.mean(), "avg_so": so.mean(), 
-                    "avg_cost": total_c.mean(), "p99_wc": np.percentile(scenario_peaks, 99) * unit_value,
-                    "p99_so": np.percentile(so, 99)
-                }
-
-            # Store results in Session State to prevent NameError
-            st.session_state.m_res = run_stress_sim(reorder_point, order_qty)
-            st.session_state.a_res = run_stress_sim(opt_r, opt_q)
-            st.session_state.stress_test_done = True
-            status.update(label="✅ Stress Test Complete!", state="complete")
-
-    # 3. DISPLAY RESULTS (ONLY IF DATA EXISTS)
+    
+    # [Keep your Simulation Logic and Buttons the same as before...]
+    
     if st.session_state.get('stress_test_done'):
         m_res = st.session_state.m_res
         a_res = st.session_state.a_res
         
-        # --- TABLE WITH DECISION VARIABLES ---
+        # 1. Create Dataframe
         comparison_data = [
-            {"Metric": "Reorder Point (ROP)", "Manual": float(reorder_point), "AI Optimized": float(opt_r), "Type": "Decision", "LowerIsBetter": None},
-            {"Metric": "Order Quantity (Qty)", "Manual": float(order_qty), "AI Optimized": float(opt_q), "Type": "Decision", "LowerIsBetter": None},
-            {"Metric": "Avg Fill Rate (%)", "Manual": m_res['avg_fr'], "AI Optimized": a_res['avg_fr'], "Type": "Metric", "LowerIsBetter": False},
-            {"Metric": "Avg Stockout Days", "Manual": m_res['avg_so'], "AI Optimized": a_res['avg_so'], "Type": "Metric", "LowerIsBetter": True},
-            {"Metric": "Peak Working Capital (P99 ₹)", "Manual": m_res['p99_wc'], "AI Optimized": a_res['p99_wc'], "Type": "Metric", "LowerIsBetter": True},
-            {"Metric": "Annual Total Cost (₹)", "Manual": m_res['avg_cost'], "AI Optimized": a_res['avg_cost'], "Type": "Metric", "LowerIsBetter": True}
+            {"Metric": "Reorder Point (ROP)", "Manual": float(reorder_point), "AI Optimized": float(opt_r), "LowerIsBetter": None},
+            {"Metric": "Order Quantity (Qty)", "Manual": float(order_qty), "AI Optimized": float(opt_q), "LowerIsBetter": None},
+            {"Metric": "Avg Fill Rate (%)", "Manual": m_res['avg_fr'], "AI Optimized": a_res['avg_fr'], "LowerIsBetter": False},
+            {"Metric": "Avg Stockout Days", "Manual": m_res['avg_so'], "AI Optimized": a_res['avg_so'], "LowerIsBetter": True},
+            {"Metric": "Peak Working Capital (P99 ₹)", "Manual": m_res['p99_wc'], "AI Optimized": a_res['p99_wc'], "LowerIsBetter": True},
+            {"Metric": "Annual Total Cost (₹)", "Manual": m_res['avg_cost'], "AI Optimized": a_res['avg_cost'], "LowerIsBetter": True}
         ]
-        
         df_comp = pd.DataFrame(comparison_data)
 
-        def style_comparison(row):
-            if row['Type'] == "Decision": return ['', '', '']
-            m, a = row['Manual'], row['AI Optimized']
-            better = (a <= m) if row['LowerIsBetter'] else (a >= m)
-            color = "background-color: #2e7d32; color: white" if better else "background-color: #c62828; color: white"
-            return ['', '', color]
+        # 2. Fix the Styling Logic (This prevents the ValueError)
+        def apply_row_style(row):
+            styles = [''] * len(row)
+            # Only style the 'AI Optimized' column (index 2) for non-decision rows
+            if row['LowerIsBetter'] is not None:
+                m, a = row['Manual'], row['AI Optimized']
+                is_better = (a <= m) if row['LowerIsBetter'] else (a >= m)
+                color = "background-color: #2e7d32; color: white" if is_better else "background-color: #c62828; color: white"
+                styles[2] = color # Index 2 is the 'AI Optimized' column
+            return styles
 
         st.write("### ⚖️ Policy Comparison")
-        st.table(df_comp.style.apply(style_comparison, axis=1).format({"Manual": "{:,.2f}", "AI Optimized": "{:,.2f}"}).hide(axis="columns", subset=["Type", "LowerIsBetter"]))
+        # We apply style only to the necessary columns and format numbers
+        st.dataframe(
+            df_comp.style.apply(apply_row_style, axis=1)
+            .format({"Manual": "{:,.2f}", "AI Optimized": "{:,.2f}"})
+            .hide(axis="columns", subset=["LowerIsBetter"]),
+            use_container_width=True
+        )
 
-        # --- FINANCIAL KPIs ---
+        # 3. KPI FINANCIAL IMPACT (Fixing the labels from your first screenshot)
         st.divider()
         k1, k2, k3 = st.columns(3)
         savings = m_res['avg_cost'] - a_res['avg_cost']
         wc_delta = m_res['p99_wc'] - a_res['p99_wc']
         
-        k1.metric("Annual Cost Savings", f"₹{round(abs(savings), 0):,}", delta=f"{round(savings,0):,}", delta_color="normal" if savings >= 0 else "inverse")
-        k2.metric("Working Capital Delta", f"₹{round(abs(wc_delta), 0):,}", delta="Unlocked" if wc_delta >= 0 else "Investment", delta_color="normal" if wc_delta >= 0 else "inverse")
+        k1.metric("Annual Cost Savings", f"₹{round(abs(savings), 0):,}", 
+                  delta="Lower Cost" if savings >= 0 else "Higher Cost", 
+                  delta_color="normal" if savings >= 0 else "inverse")
+        
+        # FIXED: This now correctly shows "Investment" in red if wc_delta is negative
+        k2.metric("Working Capital Delta", f"₹{round(abs(wc_delta), 0):,}", 
+                  delta="Cash Unlocked" if wc_delta >= 0 else "Capital Investment", 
+                  delta_color="normal" if wc_delta >= 0 else "inverse")
+        
         k3.metric("Service Level Gain", f"{round(a_res['avg_fr'] - m_res['avg_fr'], 2)}%", delta="Reliability Up")
-    else:
-        st.info("👆 Click the button to run the comparison analysis.")
-
-with tab5:
-    st.header("📋 Executive Summary")
-    
-    if not st.session_state.get('stress_test_done'):
-        st.warning("⚠️ Data Missing: Please run the 'Stress Test' in Tab 4 first to generate the board report.")
-    else:
-        m_res = st.session_state.m_res
-        a_res = st.session_state.a_res
-        opt_r, opt_q = st.session_state.best_policy
-
-        # 1. ACTIONABLE DECISIONS
-        st.subheader("🚀 Strategic Implementation")
-        c1, c2, c3 = st.columns(3)
-        
-        with c1:
-            st.metric("New Reorder Point", f"{int(opt_r)}", delta=f"{int(opt_r - reorder_point)} Units")
-        with c2:
-            st.metric("New Order Quantity", f"{int(opt_q)}", delta=f"{int(opt_q - order_qty)} Units")
-        with c3:
-            net_impact = m_res['avg_cost'] - a_res['avg_cost']
-            st.metric("Net Financial Benefit", f"₹{round(net_impact, 0):,}", delta="Annual Profit Impact")
-
-        # 2. FOUNDER'S CHECKLIST
-        st.divider()
-        st.subheader("📝 Founder's Implementation To-Do List")
-        
-        st.checkbox(f"Update ERP/System Reorder Point to **{int(opt_r)}**")
-        st.checkbox(f"Adjust Purchase Order size to **{int(opt_q)}**")
-        
-        wc_diff = m_res['p99_wc'] - a_res['p99_wc']
-        if wc_diff < 0:
-            st.error(f"⚠️ Action Required: Secure ₹{round(abs(wc_diff),0):,} in liquidity to support the higher service level.")
-        else:
-            st.success(f"💰 Action: Re-invest ₹{round(wc_diff,0):,} of unlocked cash into marketing or R&D.")
-
-        # 3. QUICK DOWNLOAD
-        csv_report = pd.DataFrame(st.session_state.m_res).to_csv().encode('utf-8')
-        st.download_button("📥 Download Board Presentation Data", data=csv_report, file_name="executive_summary.csv")

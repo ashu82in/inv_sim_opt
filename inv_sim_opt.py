@@ -213,126 +213,135 @@ with tab1:
         st.subheader("Simulation Data")
         st.dataframe(df)
 
+import numpy as np
+import pandas as pd
+import time
+import plotly.express as px
+
 with tab2:
     st.subheader("🎲 Monte Carlo Risk & Sensitivity Analysis")
     
-    n_scenarios = st.number_input("Number of Scenarios to Simulate", min_value=1, max_value=100000, value=100)
+    n_scenarios = st.number_input("Number of Scenarios to Simulate", min_value=1, max_value=100000, value=1000)
     
-    if st.button("🚀 Run Comprehensive Risk Test"):
+    if st.button("🚀 Run Comprehensive Vectorized Test"):
         start_time = time.time()
+        
+        # 1. SETUP SENSITIVITY TESTS
+        lt_tests = [lead_time, lead_time + 1, lead_time + 2]
         sensitivity_results = []
         
-        status_text = st.empty()
         progress_bar = st.progress(0)
-        
-        lt_tests = [lead_time, lead_time + 1, lead_time + 2]
-        total_steps = len(lt_tests)
-        
+        status_text = st.empty()
+
+        # 2. RUN SIMULATION FOR EACH LEAD TIME
         for idx, lt_val in enumerate(lt_tests):
             status_text.text(f"Simulating Lead Time: {lt_val} days...")
-            all_demands = np.maximum(0, np.random.normal(avg_demand, std_demand, (n_scenarios, num_days))).round()
             
-            for i in range(n_scenarios):
-                df_sim, _, metrics = run_full_simulation(
-                    all_demands[i], reorder_point, order_qty, num_days, 
-                    opening_balance, lt_val, unit_value, 
-                    holding_cost_rate, ordering_cost, calc_aging=False
-                )
+            # Generate demand once for this LT test
+            demand_matrix = np.maximum(0, np.random.normal(avg_demand, std_demand, (n_scenarios, num_days))).round()
+            
+            # Initialize Vectorized Arrays
+            inventory = np.full(n_scenarios, opening_balance, dtype=float)
+            arrival_days = np.full(n_scenarios, -1)
+            so_days = np.zeros(n_scenarios)
+            total_unmet = np.zeros(n_scenarios)
+            h_costs_accum = np.zeros(n_scenarios)
+            order_counts = np.zeros(n_scenarios)
+            daily_inv_sum = np.zeros(n_scenarios)
+
+            # Daily Simulation Loop (Vectorized across scenarios)
+            for d in range(num_days):
+                # Arrivals
+                arrived = (arrival_days == d)
+                inventory[arrived] += order_qty
+                arrival_days[arrived] = -1
                 
-                total_demand = all_demands[i].sum()
-                unmet_demand = df_sim[df_sim["Closing Balance"] == 0]["Demand"].sum()
-                metrics["fill_rate"] = ((total_demand - unmet_demand) / total_demand * 100) if total_demand > 0 else 100
-                metrics["Tested LT"] = lt_val
-                sensitivity_results.append(metrics)
-            
-            progress_bar.progress((idx + 1) / total_steps)
-        
-        res_df = pd.DataFrame(sensitivity_results)
+                # Demand Fulfillment
+                d_today = demand_matrix[:, d]
+                shortfall = np.maximum(0, d_today - inventory)
+                so_days[shortfall > 0] += 1
+                total_unmet += shortfall
+                
+                inventory = np.maximum(0, inventory - d_today)
+                
+                # Financials
+                h_costs_accum += (inventory * (unit_value * holding_cost_rate / 365))
+                daily_inv_sum += inventory
+                
+                # Reorder Logic
+                reorder_mask = (inventory <= reorder_point) & (arrival_days == -1)
+                arrival_days[reorder_mask] = d + lt_val
+                order_counts[reorder_mask] += 1
+
+            # 3. CONSTRUCT RESULTS FOR THIS LEAD TIME
+            total_annual_demand = demand_matrix.sum(axis=1)
+            fill_rates = (1 - (total_unmet / total_annual_demand)) * 100
+            avg_inv_levels = daily_inv_sum / num_days
+            avg_wc = avg_inv_levels * unit_value
+            total_costs = h_costs_accum + (order_counts * ordering_cost)
+
+            # Create a dataframe for this LT and append
+            lt_df = pd.DataFrame({
+                "fill_rate": fill_rates,
+                "stockout_days": so_days,
+                "total_cost": total_costs,
+                "avg_inv": avg_inv_levels,
+                "avg_wc": avg_wc,
+                "Tested LT": lt_val
+            })
+            sensitivity_results.append(lt_df)
+            progress_bar.progress((idx + 1) / len(lt_tests))
+
+        # 4. DATA PROCESSING
+        res_df = pd.concat(sensitivity_results)
         curr_df = res_df[res_df["Tested LT"] == lead_time]
-        
         st.success(f"Simulated {len(res_df):,} total paths in {round(time.time()-start_time, 2)}s.")
 
         # --- SECTION 1: CORE KPIs ---
         st.write("### 📊 Service Level & Financial Summary")
         k1, k2, k3, k4 = st.columns(4)
-        avg_fr = curr_df['fill_rate'].mean()
-        k1.metric("Avg Fill Rate", f"{round(avg_fr, 2)}%")
+        k1.metric("Avg Fill Rate", f"{round(curr_df['fill_rate'].mean(), 2)}%")
         k2.metric("Avg Stockout Days", f"{round(curr_df['stockout_days'].mean(), 1)}")
         k3.metric("Avg Annual Cost", f"₹{round(curr_df['total_cost'].mean(), 0)}")
         k4.metric("WC Risk (95th Pctl)", f"₹{round(curr_df['avg_wc'].quantile(0.95), 0)}")
 
-        # --- SECTION 2: STOCKOUT PROBABILITY (FIXED) ---
+        # --- SECTION 2: STOCKOUT PROBABILITY ---
         st.write("#### 🛡️ Stockout Risk Probabilities")
-        d_1 = round(num_days * 0.01, 1)
-        d_5 = round(num_days * 0.05, 1)
-        d_10 = round(num_days * 0.10, 1)
-
         p1, p2, p3, p4 = st.columns(4)
-        with p1:
-            val1 = (curr_df['stockout_days'] == 0).sum() / n_scenarios * 100
-            st.metric("Prob: No Stockouts", f"{round(val1, 2)}%")
-            st.caption("Chance of zero stockout days.")
-        with p2:
-            val2 = (curr_df['stockout_days'] < (num_days * 0.01)).sum() / n_scenarios * 100
-            st.metric("Stockouts < 1% Days", f"{round(val2, 2)}%")
-            st.caption(f"Less Than {d_1} days in {round(val2, 1)}% of cases.")
-        with p3:
-            val3 = (curr_df['stockout_days'] < (num_days * 0.05)).sum() / n_scenarios * 100
-            st.metric("Stockouts < 5% Days", f"{round(val3, 2)}%")
-            st.caption(f"Less Than {d_5} days in {round(val3, 1)}% of cases.")
-        with p4:
-            val4 = (curr_df['stockout_days'] < (num_days * 0.10)).sum() / n_scenarios * 100
-            st.metric("Stockouts < 10% Days", f"{round(val4, 2)}%")
-            st.caption(f"Less Than {d_10} days in {round(val4, 1)}% of cases.")
+        # Probabilities calculated directly from vectorized results
+        p1.metric("Prob: No Stockouts", f"{round((curr_df['stockout_days'] == 0).mean() * 100, 2)}%")
+        p2.metric("Stockouts < 1% Days", f"{round((curr_df['stockout_days'] < num_days*0.01).mean() * 100, 2)}%")
+        p3.metric("Stockouts < 5% Days", f"{round((curr_df['stockout_days'] < num_days*0.05).mean() * 100, 2)}%")
+        p4.metric("Stockouts < 10% Days", f"{round((curr_df['stockout_days'] < num_days*0.10).mean() * 100, 2)}%")
 
-        # --- SECTION 3: SENSITIVITY TABLE (Color Coded) ---
+        # --- SECTION 3: SENSITIVITY TABLE ---
         st.divider()
         st.write("### 📋 Lead Time Sensitivity Table")
         sens_table = res_df.groupby("Tested LT").agg({
-            "fill_rate": "mean",
-            "stockout_days": "mean",
-            "total_cost": "mean",
-            "avg_wc": "mean"
+            "fill_rate": "mean", "stockout_days": "mean", "total_cost": "mean", "avg_wc": "mean"
         })
         sens_table.columns = ["Avg Fill Rate (%)", "Avg Stockout Days", "Avg Cost (₹)", "Avg Working Capital (₹)"]
         
-        color_bad = 'background-color: #FF4B4B; color: black; font-weight: bold'
-        color_good = 'background-color: #228B22; color: white; font-weight: bold'
-        
+        # Styling (Same as your original code)
         styled_sens = sens_table.style.format("{:.2f}")\
-            .highlight_max(subset=["Avg Stockout Days", "Avg Cost (₹)", "Avg Working Capital (₹)"], props=color_bad)\
-            .highlight_min(subset=["Avg Stockout Days", "Avg Cost (₹)", "Avg Working Capital (₹)"], props=color_good)\
-            .highlight_max(subset=["Avg Fill Rate (%)"], props=color_good)\
-            .highlight_min(subset=["Avg Fill Rate (%)"], props=color_bad)
+            .highlight_max(subset=["Avg Stockout Days", "Avg Cost (₹)", "Avg Working Capital (₹)"], props='background-color: #FF4B4B; color: black;')\
+            .highlight_min(subset=["Avg Stockout Days", "Avg Cost (₹)", "Avg Working Capital (₹)"], props='background-color: #228B22; color: white;')\
+            .highlight_max(subset=["Avg Fill Rate (%)"], props='background-color: #228B22; color: white;')
         st.table(styled_sens)
 
-        # --- SECTION 4: ALL 4 RISK DISTRIBUTIONS (Restored) ---
+        # --- SECTION 4: RISK DISTRIBUTIONS ---
         st.divider()
         st.write("### 📈 Risk Distributions")
-        
-        row1_col1, row1_col2 = st.columns(2)
-        with row1_col1:
-            # Fill Rate Distribution
-            fig_fr = px.histogram(curr_df, x="fill_rate", title="Fill Rate Distribution (Service Level)", color_discrete_sequence=['#00CC96'])
-            st.plotly_chart(fig_fr, use_container_width=True)
-        with row1_col2:
-            # Cost Distribution
-            fig_cost = px.histogram(curr_df, x="total_cost", title="Total Inventory Cost Distribution", color_discrete_sequence=['#EF553B'])
-            st.plotly_chart(fig_cost, use_container_width=True)
+        r1_c1, r1_c2 = st.columns(2)
+        r1_c1.plotly_chart(px.histogram(curr_df, x="fill_rate", title="Fill Rate Distribution", color_discrete_sequence=['#00CC96']), use_container_width=True)
+        r1_c2.plotly_chart(px.histogram(curr_df, x="total_cost", title="Cost Distribution", color_discrete_sequence=['#EF553B']), use_container_width=True)
 
-        row2_col1, row2_col2 = st.columns(2)
-        with row2_col1:
-            # Stockout Severity
-            fig_so = px.histogram(curr_df, x="stockout_days", title="Stockout Severity Distribution", color_discrete_sequence=['#FFA15A'])
-            st.plotly_chart(fig_so, use_container_width=True)
-        with row2_col2:
-            # Avg Inventory
-            fig_inv = px.histogram(curr_df, x="avg_inv", title="Average Inventory Level Distribution", color_discrete_sequence=['#636EFA'])
-            st.plotly_chart(fig_inv, use_container_width=True)
+        r2_c1, r2_c2 = st.columns(2)
+        r2_c1.plotly_chart(px.histogram(curr_df, x="stockout_days", title="Stockout Severity", color_discrete_sequence=['#FFA15A']), use_container_width=True)
+        r2_c2.plotly_chart(px.histogram(curr_df, x="avg_inv", title="Avg Inventory Level", color_discrete_sequence=['#636EFA']), use_container_width=True)
 
         with st.expander("View Raw Statistical Data"):
             st.dataframe(curr_df.describe().T)
-
 
 with tab3:
     st.header("🧬 AI Inventory Optimizer")

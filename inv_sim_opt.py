@@ -358,9 +358,9 @@ with tab3:
         target_so_days = st.number_input("Max Allowed Stockout Days", value=2)
     
     with c_input2:
-        num_pop = 20  
-        num_gen = 10   
-        num_sim = 2000 
+        num_pop = 40 
+        num_gen = 20  
+        num_sim = 5000 
 
     # Statistical Bounds
     avg_ltd = avg_demand * lead_time

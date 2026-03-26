@@ -1128,69 +1128,63 @@ with tab5:
     st.header("📋 Executive Strategy & Action Plan")
     
     if not st.session_state.get('stress_test_done'):
-        st.warning("⚠️ Please run the Final Stress Test in Tab 4 to generate the executive report.")
+        st.warning("⚠️ Please run the Final Stress Test in Tab 4 first to generate this report.")
     else:
         m = st.session_state.m_res
         a = st.session_state.a_res
         
-        # --- THE FIX: Pass index=[0] to handle scalar values ---
-        # This converts the simulation dictionaries into a clean comparison table
+        # --- THE FIX: Wrap results in a list [] to avoid the scalar/index ValueError ---
         summary_df = pd.DataFrame([m, a], index=["Manual Policy", "AI Optimized"])
         
-        # 1. BIG PICTURE KPIs
+        # 1. BIG PICTURE KPIs with Corrected Color Logic
         st.write("### 🚀 Strategic Impact Summary")
         i1, i2, i3 = st.columns(3)
         
         annual_profit = (m['avg_cost'] - a['avg_cost'])
-        wc_unlocked = (m['p99_wc'] - a['p99_wc'])
+        wc_impact = (a['p99_wc'] - m['p99_wc']) # Positive means we need MORE capital
         reliability_change = (a['avg_fr'] - m['avg_fr'])
 
+        # Profit: Positive savings = Green
         i1.metric("Annual Profit Impact", f"₹{abs(annual_profit):,.0f}", 
-                  delta="Increased Profit" if annual_profit >= 0 else "Decreased Profit",
+                  delta="Savings" if annual_profit >= 0 else "Loss",
                   delta_color="normal")
         
-        i2.metric("Working Capital Impact", f"₹{abs(wc_unlocked):,.0f}", 
-                  delta="Cash Unlocked" if wc_unlocked >= 0 else "Extra Capital Needed",
-                  delta_color="normal")
+        # Working Capital: Increase = Red (Inverse logic)
+        i2.metric("Working Capital Change", f"₹{abs(wc_impact):,.0f}", 
+                  delta="Extra Capital" if wc_impact > 0 else "Cash Unlocked",
+                  delta_color="inverse")
 
-        # Force RED if service level drops
+        # Service Level: Decrease = Red (Normal logic)
         i3.metric("Service Level Change", f"{a['avg_fr']:.2f}%", 
                   delta=f"{reliability_change:+.2f}%", 
-                  delta_color="normal" if reliability_change >= 0 else "inverse")
+                  delta_color="normal")
 
         st.divider()
 
         # 2. FOUNDER'S ACTION PLAN
         st.write("### 📝 Founder's Action Plan")
-        
         col_plan1, col_plan2 = st.columns(2)
         
         with col_plan1:
-            st.info("#### ✅ Immediate Actions")
+            st.info("#### ✅ Immediate Implementation")
             st.markdown(f"""
-            1. **Update ROP:** Adjust system Reorder Point from **{reorder_point}** to **{st.session_state.best_policy[0]}**.
-            2. **Adjust Qty:** Set fixed Order Quantity to **{st.session_state.best_policy[1]}**.
-            3. **Monitor Lead Time:** The AI assumes a {lead_time}-day lead time. If this increases, rerun the Tab 2 Sensitivity test.
+            1. **New Reorder Point:** Set to **{st.session_state.best_policy[0]}**.
+            2. **New Order Qty:** Set to **{st.session_state.best_policy[1]}**.
+            3. **Inventory Position:** Train warehouse staff to count 'In-Transit' stock before placing new orders.
             """)
 
         with col_plan2:
-            if reliability_change < 0:
-                st.warning("#### ⚠️ Risk Mitigation")
-                st.write(f"""
-                The AI has prioritized **cost savings** over absolute safety. 
-                You are trading {abs(reliability_change):.2f}% of your fill rate for ₹{annual_profit:,.0f} in savings. 
-                *If this risk is unacceptable, return to Tab 3 and increase the 'Target Service Level'.*
-                """)
+            if reliability_change < 0 or wc_impact > 0:
+                st.warning("#### ⚠️ Trade-off Alert")
+                if reliability_change < 0:
+                    st.write(f"• **Risk:** Reliability dropped by {abs(reliability_change):.2f}%. Check if this fits your brand promise.")
+                if wc_impact > 0:
+                    st.write(f"• **Cash:** This strategy requires ₹{wc_impact:,.0f} more capital to operate safely.")
             else:
                 st.success("#### 📈 Efficiency Gains")
-                st.write(f"""
-                This is a 'Win-Win' scenario. The AI has found a way to 
-                **increase reliability** while **reducing costs**. 
-                The primary gain comes from optimizing the 'Inventory Position' logic 
-                to prevent double-ordering during lead times.
-                """)
+                st.write("The AI has optimized the supply chain to provide better service with less capital. Implement immediately.")
 
         # 3. TECHNICAL AUDIT TRAIL
-        with st.expander("🔍 View Technical Simulation Data"):
-            # Transpose for easier reading
+        with st.expander("🔍 View Detailed Comparison Data"):
+            # Fixed the styling to ensure rows are not colored if they are just inputs
             st.table(summary_df.T.style.format("{:.2f}"))

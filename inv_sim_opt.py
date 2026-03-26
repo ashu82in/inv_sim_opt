@@ -119,7 +119,7 @@ holding_cost_rate = holding_cost_percent / 100
 # =========================================================
 # TABS SETUP
 # =========================================================
-tab1, tab2, tab3, tab4 = st.tabs(["📊 Detailed Analysis", "🎲 Monte Carlo Simulation", "🎯 Policy Optimizer", "Final Results"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Detailed Analysis", "🎲 Monte Carlo Simulation", "🎯 Policy Optimizer", "Final Results","Inventory Summary"])
 
 with tab1:
     # --- Policy Input ---
@@ -785,3 +785,83 @@ with tab4:
         }).melt(), x="variable", y="value", color="variable",
         title="Reliability Spread (Fill Rate %)",
         color_discrete_map={"Manual": "#EF553B", "AI Optimized": "#00CC96"}), use_container_width=True)
+
+with tab5:
+    st.header("📋 Executive Summary & Decision Support")
+    st.write("A high-level summary of the optimized inventory strategy for board-level review.")
+    
+    if 'best_policy' not in st.session_state or st.session_state.best_policy is None:
+        st.info("Please run the Optimizer in Tab 3 to generate this report.")
+    else:
+        # 1. THE "BIG THREE" ACTIONABLE KPIs
+        st.divider()
+        col1, col2, col3 = st.columns(3)
+        
+        # Calculate Deltas (Assuming m_res and a_res exist from Tab 4)
+        # Note: If running this tab independently, you'd trigger the simulation once here.
+        
+        with col1:
+            st.metric("Recommended ROP", f"{int(opt_r)} Units", 
+                      delta=f"{int(opt_r - reorder_point)} vs. Current")
+            st.caption("When to place the next order.")
+            
+        with col2:
+            st.metric("Recommended Qty", f"{int(opt_q)} Units", 
+                      delta=f"{int(opt_q - order_qty)} vs. Current")
+            st.caption("How much to order each time.")
+            
+        with col3:
+            net_impact = m_res['avg_cost'] - a_res['avg_cost']
+            st.metric("Net Annual Benefit", f"₹{round(net_impact, 0):,}", 
+                      delta="Increased Profit" if net_impact > 0 else "Service Investment",
+                      delta_color="normal" if net_impact > 0 else "inverse")
+            st.caption("Total cost reduction (Holding + Ordering + Penalties).")
+
+        # 2. STRATEGIC POSITIONING CHART
+        st.divider()
+        st.subheader("🎯 Strategy Mapping: Service vs. Capital")
+        
+        # Creating a comparison for the "Sawtooth" visualization concept
+        chart_data = pd.DataFrame({
+            "Strategy": ["Manual (Current)", "AI Optimized"],
+            "Service Level (%)": [m_res['avg_fr'], a_res['avg_fr']],
+            "Max Cash Required (₹)": [m_res['p99_wc'], a_res['p99_wc']],
+            "Annual Risk (Stockout Days)": [m_res['avg_so'], a_res['avg_so']]
+        })
+        
+        c1, c2 = st.columns(2)
+        with c1:
+            fig_fr = px.bar(chart_data, x="Strategy", y="Service Level (%)", 
+                            color="Strategy", text_auto='.1f',
+                            title="Reliability Comparison",
+                            color_discrete_map={"Manual (Current)": "#EF553B", "AI Optimized": "#00CC96"})
+            st.plotly_chart(fig_fr, use_container_width=True)
+            
+        with c2:
+            fig_wc = px.bar(chart_data, x="Strategy", y="Max Cash Required (₹)", 
+                            color="Strategy", text_auto=',.0f',
+                            title="Liquidity Requirement (P99 Peak)",
+                            color_discrete_map={"Manual (Current)": "#636EFA", "AI Optimized": "#AB63FA"})
+            st.plotly_chart(fig_wc, use_container_width=True)
+
+        # 3. THE FOUNDER'S CHECKLIST
+        st.divider()
+        st.subheader("📝 Implementation Roadmap")
+        
+        st.checkbox(f"Update ERP/System Reorder Point to **{int(opt_r)}**", value=False)
+        st.checkbox(f"Adjust Standard Purchase Order Quantity to **{int(opt_q)}**", value=False)
+        
+        if wc_delta < 0:
+            st.checkbox(f"Secure **₹{round(abs(wc_delta), 0):,}** in additional liquidity for buffer stock", value=False)
+        else:
+            st.info(f"✨ Action: Re-allocate **₹{round(wc_delta, 0):,}** of unlocked cash to other business growth areas.")
+
+        # 4. EXPORT FOR BOARD MEETING
+        st.divider()
+        st.download_button(
+            label="📥 Export Executive PDF Report",
+            data=df_comp.to_csv().encode('utf-8'),
+            file_name=f"Inventory_Strategy_{pd.Timestamp.now().strftime('%Y%m%d')}.csv",
+            mime='text/csv',
+            help="Downloads the comparison data for external reporting."
+        )

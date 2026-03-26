@@ -846,52 +846,179 @@ with tab3:
         if history:
             st.plotly_chart(px.line(y=history, title="Learning Curve (Fitness Improvement)", markers=True))
 
+# with tab4:
+#     st.header("🛡️ Strategy Validation & Impact")
+#     st.write("Compare your **Manual Policy** against the **AI Optimized Policy** under 10,000 extreme scenarios.")
+
+#     # 1. BRIDGE: Pull data from Tab 3 "Locker"
+#     if st.session_state.best_policy is None:
+#         st.warning("⚠️ No Optimized Policy found. Please run the AI Optimizer in Tab 3 first.")
+#         st.stop()
+#     else:
+#         opt_r, opt_q = st.session_state.best_policy
+
+#     # 2. SIMULATION ENGINE
+#     if st.button("🏁 Run Final 10,000 Scenario Stress Test"):
+#         with st.status("Simulating 10,000 'Worst-Case' Years...", expanded=True) as status:
+#             n_stress = 10000
+#             stress_demands = np.maximum(0, np.random.normal(avg_demand, std_demand, (n_stress, num_days))).round()
+            
+#             def run_stress_sim(r, q):
+#                 inv = np.full(n_stress, opening_balance, dtype=float)
+#                 arr = np.full(n_stress, -1)
+#                 so, unmet, h_cost, orders = [np.zeros(n_stress) for _ in range(4)]
+#                 scenario_peaks = np.zeros(n_stress)
+                
+#                 for d in range(num_days):
+#                     mask_arr = (arr == d)
+#                     inv[mask_arr] += q
+#                     arr[mask_arr] = -1
+#                     d_t = stress_demands[:, d]
+#                     short = np.maximum(0, d_t - inv)
+#                     so[short > 0] += 1
+#                     unmet += short
+#                     inv = np.maximum(0, inv - d_t)
+#                     h_cost += (inv * (unit_value * holding_cost_rate / 365))
+#                     scenario_peaks = np.maximum(scenario_peaks, inv)
+#                     mask_re = (inv <= r) & (arr == -1)
+#                     arr[mask_re] = d + lead_time
+#                     orders[mask_re] += 1
+                
+#                 fr = (1 - (unmet / stress_demands.sum(axis=1))) * 100
+#                 return {
+#                     "fr_raw": fr, "avg_fr": fr.mean(), "avg_so": so.mean(), 
+#                     "avg_cost": (h_cost + (orders * ordering_cost)).mean(), 
+#                     "p99_wc": np.percentile(scenario_peaks, 99) * unit_value,
+#                     "p99_so": np.percentile(so, 99)
+#                 }
+
+#             st.session_state.m_res = run_stress_sim(reorder_point, order_qty)
+#             st.session_state.a_res = run_stress_sim(opt_r, opt_q)
+#             st.session_state.stress_test_done = True
+#             status.update(label="✅ Stress Test Complete!", state="complete")
+
+#     # 3. DISPLAY RESULTS
+#     if st.session_state.get('stress_test_done'):
+#         m_res, a_res = st.session_state.m_res, st.session_state.a_res
+        
+#         # --- TABLE WITH DECISION VARIABLES ---
+#         df_comp = pd.DataFrame([
+#             {"Metric": "Reorder Point (ROP)", "Manual": float(reorder_point), "AI Optimized": float(opt_r), "LowerIsBetter": None},
+#             {"Metric": "Order Quantity (Qty)", "Manual": float(order_qty), "AI Optimized": float(opt_q), "LowerIsBetter": None},
+#             {"Metric": "Avg Fill Rate (%)", "Manual": m_res['avg_fr'], "AI Optimized": a_res['avg_fr'], "LowerIsBetter": False},
+#             {"Metric": "Avg Stockout Days", "Manual": m_res['avg_so'], "AI Optimized": a_res['avg_so'], "LowerIsBetter": True},
+#             {"Metric": "Peak Working Capital (P99 ₹)", "Manual": m_res['p99_wc'], "AI Optimized": a_res['p99_wc'], "LowerIsBetter": True},
+#             {"Metric": "Annual Total Cost (₹)", "Manual": m_res['avg_cost'], "AI Optimized": a_res['avg_cost'], "LowerIsBetter": True}
+#         ])
+
+#         def style_rows(row):
+#             styles = [''] * len(row)
+#             if row['LowerIsBetter'] is not None:
+#                 is_better = (row['AI Optimized'] <= row['Manual']) if row['LowerIsBetter'] else (row['AI Optimized'] >= row['Manual'])
+#                 styles[2] = "background-color: #2e7d32; color: white" if is_better else "background-color: #c62828; color: white"
+#             return styles
+
+#         st.write("### ⚖️ Policy Comparison")
+#         st.dataframe(df_comp.style.apply(style_rows, axis=1).format({"Manual": "{:,.2f}", "AI Optimized": "{:,.2f}"}).hide(axis="columns", subset=["LowerIsBetter"]), use_container_width=True)
+
+#         # --- RESTORED KPIs: FINANCIAL IMPACT ---
+#         st.divider()
+#         st.write("### 💰 Strategic Financial Impact")
+#         k1, k2, k3 = st.columns(3)
+        
+#         savings = m_res['avg_cost'] - a_res['avg_cost']
+#         wc_delta = m_res['p99_wc'] - a_res['p99_wc']
+#         fr_delta = a_res['avg_fr'] - m_res['avg_fr']
+
+#         # KPI 1: Annual Cost Savings
+#         k1.metric("Annual Cost Savings", f"₹{round(abs(savings), 0):,}", 
+#                   delta=f"{round((savings/m_res['avg_cost'])*100, 1) if m_res['avg_cost'] !=0 else 0}%",
+#                   delta_color="normal" if savings >= 0 else "inverse")
+        
+#         # KPI 2: Working Capital (Liquidity)
+#         k2.metric("Working Capital Delta", f"₹{round(abs(wc_delta), 0):,}", 
+#                   delta="Cash Unlocked" if wc_delta >= 0 else "Capital Investment",
+#                   delta_color="normal" if wc_delta >= 0 else "inverse")
+        
+#         # KPI 3: Reliability Jump
+#         k3.metric("Service Level Gain", f"{round(fr_delta, 2)}%", 
+#                   delta="Higher Reliability" if fr_delta >= 0 else "Lower Reliability",
+#                   delta_color="normal" if fr_delta >= 0 else "inverse")
+
+#         # Download Button
+#         st.download_button("📥 Download Full Report", df_comp.to_csv(index=False), "inventory_report.csv", "text/csv")
+
 with tab4:
     st.header("🛡️ Strategy Validation & Impact")
     st.write("Compare your **Manual Policy** against the **AI Optimized Policy** under 10,000 extreme scenarios.")
 
-    # 1. BRIDGE: Pull data from Tab 3 "Locker"
-    if st.session_state.best_policy is None:
+    # 1. SESSION STATE BRIDGE
+    if 'best_policy' not in st.session_state:
         st.warning("⚠️ No Optimized Policy found. Please run the AI Optimizer in Tab 3 first.")
         st.stop()
     else:
         opt_r, opt_q = st.session_state.best_policy
 
-    # 2. SIMULATION ENGINE
+    # 2. SIMULATION ENGINE (High-Speed Vectorized with Pipeline Logic)
     if st.button("🏁 Run Final 10,000 Scenario Stress Test"):
         with st.status("Simulating 10,000 'Worst-Case' Years...", expanded=True) as status:
             n_stress = 10000
+            # Pre-generate Stress Demand
             stress_demands = np.maximum(0, np.random.normal(avg_demand, std_demand, (n_stress, num_days))).round()
+            total_stress_demand = stress_demands.sum(axis=1)
+            daily_h_unit = unit_value * holding_cost_rate / 365
             
             def run_stress_sim(r, q):
                 inv = np.full(n_stress, opening_balance, dtype=float)
-                arr = np.full(n_stress, -1)
-                so, unmet, h_cost, orders = [np.zeros(n_stress) for _ in range(4)]
+                # Arrivals Matrix + Pipeline Tracker
+                arrivals = np.zeros((n_stress, num_days + lead_time + 1))
+                pipeline_total = np.zeros(n_stress)
+                
+                so_days, total_unmet, h_costs, orders = [np.zeros(n_stress) for _ in range(4)]
                 scenario_peaks = np.zeros(n_stress)
                 
                 for d in range(num_days):
-                    mask_arr = (arr == d)
-                    inv[mask_arr] += q
-                    arr[mask_arr] = -1
+                    # A. Receive Arrivals
+                    landing = arrivals[:, d]
+                    inv += landing
+                    pipeline_total -= landing
+                    
+                    # B. Process Demand
                     d_t = stress_demands[:, d]
-                    short = np.maximum(0, d_t - inv)
-                    so[short > 0] += 1
-                    unmet += short
-                    inv = np.maximum(0, inv - d_t)
-                    h_cost += (inv * (unit_value * holding_cost_rate / 365))
+                    inv -= d_t
+                    
+                    # C. Handle Stockouts
+                    out_mask = (inv < 0)
+                    if np.any(out_mask):
+                        so_days[out_mask] += 1
+                        total_unmet[out_mask] -= inv[out_mask]
+                        inv[out_mask] = 0
+                    
+                    # D. Metrics
                     scenario_peaks = np.maximum(scenario_peaks, inv)
-                    mask_re = (inv <= r) & (arr == -1)
-                    arr[mask_re] = d + lead_time
-                    orders[mask_re] += 1
+                    h_costs += (inv * daily_h_unit)
+                    
+                    # E. Reorder Logic (Inventory Position)
+                    inv_pos = inv + pipeline_total
+                    reorder_mask = (inv_pos <= r)
+                    
+                    if np.any(reorder_mask):
+                        arrivals[reorder_mask, d + lead_time] += q
+                        pipeline_total[reorder_mask] += q
+                        orders[reorder_mask] += 1
                 
-                fr = (1 - (unmet / stress_demands.sum(axis=1))) * 100
+                # Final Aggregation
+                fr = (1 - (total_unmet / total_stress_demand)) * 100
                 return {
-                    "fr_raw": fr, "avg_fr": fr.mean(), "avg_so": so.mean(), 
-                    "avg_cost": (h_cost + (orders * ordering_cost)).mean(), 
+                    "avg_fr": fr.mean(), 
+                    "avg_so": so_days.mean(), 
+                    "avg_cost": (h_costs + (orders * ordering_cost)).mean(), 
                     "p99_wc": np.percentile(scenario_peaks, 99) * unit_value,
-                    "p99_so": np.percentile(so, 99)
+                    "p99_so": np.percentile(so_days, 99),
+                    "p1_fr": np.percentile(fr, 1)
                 }
 
+            # Run both policies
             st.session_state.m_res = run_stress_sim(reorder_point, order_qty)
             st.session_state.a_res = run_stress_sim(opt_r, opt_q)
             st.session_state.stress_test_done = True
@@ -901,12 +1028,12 @@ with tab4:
     if st.session_state.get('stress_test_done'):
         m_res, a_res = st.session_state.m_res, st.session_state.a_res
         
-        # --- TABLE WITH DECISION VARIABLES ---
+        # Comparison Table
         df_comp = pd.DataFrame([
             {"Metric": "Reorder Point (ROP)", "Manual": float(reorder_point), "AI Optimized": float(opt_r), "LowerIsBetter": None},
             {"Metric": "Order Quantity (Qty)", "Manual": float(order_qty), "AI Optimized": float(opt_q), "LowerIsBetter": None},
             {"Metric": "Avg Fill Rate (%)", "Manual": m_res['avg_fr'], "AI Optimized": a_res['avg_fr'], "LowerIsBetter": False},
-            {"Metric": "Avg Stockout Days", "Manual": m_res['avg_so'], "AI Optimized": a_res['avg_so'], "LowerIsBetter": True},
+            {"Metric": "Worst-Case Stockout Days (P99)", "Manual": m_res['p99_so'], "AI Optimized": a_res['p99_so'], "LowerIsBetter": True},
             {"Metric": "Peak Working Capital (P99 ₹)", "Manual": m_res['p99_wc'], "AI Optimized": a_res['p99_wc'], "LowerIsBetter": True},
             {"Metric": "Annual Total Cost (₹)", "Manual": m_res['avg_cost'], "AI Optimized": a_res['avg_cost'], "LowerIsBetter": True}
         ])
@@ -921,7 +1048,7 @@ with tab4:
         st.write("### ⚖️ Policy Comparison")
         st.dataframe(df_comp.style.apply(style_rows, axis=1).format({"Manual": "{:,.2f}", "AI Optimized": "{:,.2f}"}).hide(axis="columns", subset=["LowerIsBetter"]), use_container_width=True)
 
-        # --- RESTORED KPIs: FINANCIAL IMPACT ---
+        # 4. FINAL KPIs
         st.divider()
         st.write("### 💰 Strategic Financial Impact")
         k1, k2, k3 = st.columns(3)
@@ -930,23 +1057,9 @@ with tab4:
         wc_delta = m_res['p99_wc'] - a_res['p99_wc']
         fr_delta = a_res['avg_fr'] - m_res['avg_fr']
 
-        # KPI 1: Annual Cost Savings
-        k1.metric("Annual Cost Savings", f"₹{round(abs(savings), 0):,}", 
-                  delta=f"{round((savings/m_res['avg_cost'])*100, 1) if m_res['avg_cost'] !=0 else 0}%",
-                  delta_color="normal" if savings >= 0 else "inverse")
-        
-        # KPI 2: Working Capital (Liquidity)
-        k2.metric("Working Capital Delta", f"₹{round(abs(wc_delta), 0):,}", 
-                  delta="Cash Unlocked" if wc_delta >= 0 else "Capital Investment",
-                  delta_color="normal" if wc_delta >= 0 else "inverse")
-        
-        # KPI 3: Reliability Jump
-        k3.metric("Service Level Gain", f"{round(fr_delta, 2)}%", 
-                  delta="Higher Reliability" if fr_delta >= 0 else "Lower Reliability",
-                  delta_color="normal" if fr_delta >= 0 else "inverse")
-
-        # Download Button
-        st.download_button("📥 Download Full Report", df_comp.to_csv(index=False), "inventory_report.csv", "text/csv")
+        k1.metric("Annual Profit Impact", f"₹{round(abs(savings), 0):,}", delta="Savings" if savings > 0 else "Investment")
+        k2.metric("Working Capital Delta", f"₹{round(abs(wc_delta), 0):,}", delta="Cash Unlocked" if wc_delta > 0 else "Extra Capital")
+        k3.metric("Service Level Gain", f"{round(fr_delta, 2)}%", delta="Reliability Up" if fr_delta > 0 else "Reliability Down")
 
 with tab5:
     st.header("📋 Executive Summary & Action Plan")

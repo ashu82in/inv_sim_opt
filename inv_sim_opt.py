@@ -709,7 +709,7 @@ with tab4:
     if st.session_state.get('stress_test_done'):
         m_res, a_res = st.session_state.m_res, st.session_state.a_res
         
-        # Table Data
+        # --- TABLE WITH DECISION VARIABLES ---
         df_comp = pd.DataFrame([
             {"Metric": "Reorder Point (ROP)", "Manual": float(reorder_point), "AI Optimized": float(opt_r), "LowerIsBetter": None},
             {"Metric": "Order Quantity (Qty)", "Manual": float(order_qty), "AI Optimized": float(opt_q), "LowerIsBetter": None},
@@ -719,7 +719,6 @@ with tab4:
             {"Metric": "Annual Total Cost (₹)", "Manual": m_res['avg_cost'], "AI Optimized": a_res['avg_cost'], "LowerIsBetter": True}
         ])
 
-        # Bulletproof Styling
         def style_rows(row):
             styles = [''] * len(row)
             if row['LowerIsBetter'] is not None:
@@ -730,33 +729,96 @@ with tab4:
         st.write("### ⚖️ Policy Comparison")
         st.dataframe(df_comp.style.apply(style_rows, axis=1).format({"Manual": "{:,.2f}", "AI Optimized": "{:,.2f}"}).hide(axis="columns", subset=["LowerIsBetter"]), use_container_width=True)
 
-        # Download
-        st.download_button("📥 Download Report", df_comp.to_csv(index=False), "inventory_report.csv", "text/csv")
-
-with tab5:
-    st.header("📋 Executive Summary")
-    
-    if not st.session_state.get('stress_test_done'):
-        st.warning("⚠️ Please run the Stress Test in Tab 4 first.")
-    else:
-        m_res, a_res = st.session_state.m_res, st.session_state.a_res
-        opt_r, opt_q = st.session_state.best_policy
-
-        st.subheader("🚀 Strategic Decisions")
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Set ROP to", f"{int(opt_r)}", f"{int(opt_r - reorder_point)} change")
-        c2.metric("Set Qty to", f"{int(opt_q)}", f"{int(opt_q - order_qty)} change")
+        # --- RESTORED KPIs: FINANCIAL IMPACT ---
+        st.divider()
+        st.write("### 💰 Strategic Financial Impact")
+        k1, k2, k3 = st.columns(3)
         
         savings = m_res['avg_cost'] - a_res['avg_cost']
-        c3.metric("Annual Profit Impact", f"₹{round(abs(savings), 0):,}", delta="Savings" if savings > 0 else "Investment", delta_color="normal" if savings > 0 else "inverse")
+        wc_delta = m_res['p99_wc'] - a_res['p99_wc']
+        fr_delta = a_res['avg_fr'] - m_res['avg_fr']
 
-        st.divider()
-        st.subheader("📝 Founder's Action Plan")
-        st.checkbox(f"Update Reorder Point to {int(opt_r)} in System")
-        st.checkbox(f"Adjust standard PO size to {int(opt_q)} units")
+        # KPI 1: Annual Cost Savings
+        k1.metric("Annual Cost Savings", f"₹{round(abs(savings), 0):,}", 
+                  delta=f"{round((savings/m_res['avg_cost'])*100, 1) if m_res['avg_cost'] !=0 else 0}%",
+                  delta_color="normal" if savings >= 0 else "inverse")
         
-        wc_diff = m_res['p99_wc'] - a_res['p99_wc']
-        if wc_diff < 0:
-            st.error(f"👉 **Finance Action:** Secure ₹{round(abs(wc_diff),0):,}- in extra liquidity for buffer stock.")
+        # KPI 2: Working Capital (Liquidity)
+        k2.metric("Working Capital Delta", f"₹{round(abs(wc_delta), 0):,}", 
+                  delta="Cash Unlocked" if wc_delta >= 0 else "Capital Investment",
+                  delta_color="normal" if wc_delta >= 0 else "inverse")
+        
+        # KPI 3: Reliability Jump
+        k3.metric("Service Level Gain", f"{round(fr_delta, 2)}%", 
+                  delta="Higher Reliability" if fr_delta >= 0 else "Lower Reliability",
+                  delta_color="normal" if fr_delta >= 0 else "inverse")
+
+        # Download Button
+        st.download_button("📥 Download Full Report", df_comp.to_csv(index=False), "inventory_report.csv", "text/csv")
+
+with tab5:
+    st.header("📋 Executive Summary & Action Plan")
+    
+    # 1. BRIDGE: Pull data from Tab 4 "Locker"
+    if not st.session_state.get('stress_test_done'):
+        st.warning("⚠️ Data Missing: Please run the 'Stress Test' in Tab 4 first to generate the board report.")
+    else:
+        # Retrieve persistent results
+        m_res = st.session_state.m_res
+        a_res = st.session_state.a_res
+        opt_r, opt_q = st.session_state.best_policy
+        
+        # Calculate key deltas for the narrative
+        savings = m_res['avg_cost'] - a_res['avg_cost']
+        wc_delta = m_res['p99_wc'] - a_res['p99_wc']
+        fr_delta = a_res['avg_fr'] - m_res['avg_fr']
+
+        # 2. THE BIG THREE: STRATEGIC IMPACT
+        st.subheader("🚀 Final Strategic Impact")
+        k1, k2, k3 = st.columns(3)
+        
+        with k1:
+            st.metric("Annual Profit Impact", f"₹{round(abs(savings), 0):,}", 
+                      delta="Net Savings" if savings >= 0 else "Net Investment",
+                      delta_color="normal" if savings >= 0 else "inverse")
+            st.caption("Total cost change (Holding + Ordering + Stockouts)")
+
+        with k2:
+            st.metric("Capital Mobility", f"₹{round(abs(wc_delta), 0):,}", 
+                      delta="Cash Unlocked" if wc_delta >= 0 else "Capital Required",
+                      delta_color="normal" if wc_delta >= 0 else "inverse")
+            st.caption("Peak Working Capital change (P99)")
+
+        with k3:
+            st.metric("Service Reliability", f"{round(a_res['avg_fr'], 2)}%", 
+                      delta=f"{round(fr_delta, 2)}% Gain",
+                      delta_color="normal" if fr_delta >= 0 else "inverse")
+            st.caption("Average Fill Rate across all scenarios")
+
+        # 3. THE FOUNDER'S CHECKLIST (Implementation Roadmap)
+        st.divider()
+        st.subheader("📝 Founder's Implementation Roadmap")
+        
+        st.markdown("### Step 1: System Updates")
+        st.checkbox(f"Update ERP/Inventory Reorder Point (ROP) from {reorder_point} ➔ **{int(opt_r)}** units")
+        st.checkbox(f"Standardize Purchase Order Quantity (Qty) from {order_qty} ➔ **{int(opt_q)}** units")
+        
+        st.markdown("### Step 2: Financial Allocation")
+        if wc_delta < 0:
+            st.error(f"🚩 **Action Required:** Secure **₹{round(abs(wc_delta), 0):,}** in additional liquidity. This 'Insurance' prevents stockouts during demand spikes.")
         else:
-            st.success(f"👉 **Finance Action:** Re-invest ₹{round(wc_diff,0):,}- of unlocked cash.")
+            st.success(f"✨ **Action:** Re-allocate **₹{round(wc_delta, 0):,}** of unlocked cash into high-growth areas like Marketing or R&D.")
+
+        # 4. FINAL STORYTELLING ANALOGY
+        st.divider()
+        st.info(f"💡 **Founder's Insight:** By moving to an ROP of {int(opt_r)}, you aren't just buying stock; you are buying **Peace of Mind**. In 99% of future 'storms', your business will now remain afloat while competitors run dry.")
+
+        # 5. EXPORT FOR BOARD REVIEW
+        st.divider()
+        report_df = pd.DataFrame(st.session_state.m_res).transpose() # Quick summary
+        st.download_button(
+            label="📥 Download Executive PDF Data",
+            data=report_df.to_csv().encode('utf-8'),
+            file_name=f"Executive_Summary_{pd.Timestamp.now().strftime('%Y%m%d')}.csv",
+            mime='text/csv'
+        )

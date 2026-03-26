@@ -1027,9 +1027,10 @@ with tab4:
         ])
 
         st.write("### ⚖️ Policy Comparison")
-        st.dataframe(df_comp.format({"Manual": "{:,.2f}", "AI Optimized": "{:,.2f}"}), use_container_width=True)
+        # FIXED: Using .style.format instead of .format
+        st.dataframe(df_comp.style.format({"Manual": "{:,.2f}", "AI Optimized": "{:,.2f}"}), use_container_width=True)
 
-        # 4. DYNAMIC KPIs (Red if inefficient)
+        # 4. STRATEGIC KPIs (Red for Inefficiency)
         st.divider()
         st.write("### 💰 Strategic Financial Impact")
         k1, k2, k3 = st.columns(3)
@@ -1038,24 +1039,29 @@ with tab4:
         wc_delta = m_res['p99_wc'] - a_res['p99_wc']
         fr_delta = a_res['avg_fr'] - m_res['avg_fr']
 
-        # Cost KPI: Red if AI costs more than Manual
+        # KPI 1: Annual Profit Impact
         k1.metric("Annual Profit Impact", f"₹{round(abs(savings), 0):,}", 
                   delta="Savings" if savings >= 0 else "Extra Cost", 
                   delta_color="normal" if savings >= 0 else "inverse")
         
-        # Working Capital KPI: Red if AI ties up more cash
+        # KPI 2: Working Capital (Liquidity)
         k2.metric("Working Capital Delta", f"₹{round(abs(wc_delta), 0):,}", 
                   delta="Cash Unlocked" if wc_delta >= 0 else "Extra Capital",
                   delta_color="normal" if wc_delta >= 0 else "inverse")
         
-        # Service Level KPI: Red if AI is less reliable
+        # KPI 3: Reliability Jump
         k3.metric("Service Level Gain", f"{round(fr_delta, 2)}%", 
                   delta="Reliability Up" if fr_delta >= 0 else "Reliability Down",
                   delta_color="normal" if fr_delta >= 0 else "inverse")
 
-        # 5. FIXED DATAFRAME EXPORT (Resolves the ValueError)
-        report_df = pd.DataFrame([m_res, a_res], index=["Manual", "AI Optimized"]).T
-        st.download_button("📥 Download Full Report", report_df.to_csv(), "report.csv")
+        # 5. EXPORT (Properly handling scalars)
+        report_data = {
+            "Metric": ["Avg Fill Rate", "Avg Stockout Days", "Total Cost", "Peak WC"],
+            "Manual": [m_res['avg_fr'], m_res['avg_so'], m_res['avg_cost'], m_res['p99_wc']],
+            "AI Optimized": [a_res['avg_fr'], a_res['avg_so'], a_res['avg_cost'], a_res['p99_wc']]
+        }
+        report_df = pd.DataFrame(report_data)
+        st.download_button("📥 Download Full Report", report_df.to_csv(index=False), "inventory_report.csv")
 
 
 with tab5:

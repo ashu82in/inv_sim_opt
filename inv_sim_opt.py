@@ -517,52 +517,65 @@ with tab2:
         
         with st.expander("View Raw Statistical Data"):
             st.dataframe(curr_df.describe().T)
+
 # with tab3:
 #     st.header("🧬 AI Inventory Optimizer")
     
-#     # --- 1. TARGETS & SEARCH SPACE ---
-#     c_input1, c_input2 = st.columns(2)
-#     with c_input1:
-#         target_fr = st.slider("Target Annual Fill Rate (%)", 85.0, 100.0, 95.0)
-#         target_so_days = st.number_input("Max Allowed Stockout Days", value=2)
+#     # --- 1. DYNAMIC CONSTRAINT UI ---
+#     st.subheader("Define Your Business Constraints")
+#     col_c1, col_c2 = st.columns(2)
     
-#     with c_input2:
-#         num_pop = 40 
-#         num_gen = 20  
-#         num_sim = 5000 
+#     with col_c1:
+#         use_so_constraint = st.toggle("Limit Stockout Days (P99)", value=True)
+#         if use_so_constraint:
+#             target_so_days = st.number_input("Max Allowed Stockout Days", value=5, step=1)
+#         target_fr = st.slider("Min. Acceptable Fill Rate (P1) %", 80.0, 100.0, 95.0)
 
-#     # Statistical Bounds
+#     with col_c2:
+#         use_wc_constraint = st.toggle("Limit Peak Working Capital (P99)", value=False)
+#         if use_wc_constraint:
+#             max_wc_allowed = st.number_input("Maximum Cash Ceiling (₹)", value=100000, step=5000)
+    
+#     # Optimizer Hyperparameters
+#     with st.expander("⚙️ Optimizer Settings"):
+#         num_pop = st.slider("Population Size (Genetic Diversity)", 20, 100, 40)
+#         num_gen = st.slider("Generations (Fine-tuning)", 5, 50, 20)
+#         num_sim = 2000 # Balanced for speed vs accuracy
+
+#     # Statistical Search Space
 #     avg_ltd = avg_demand * lead_time
 #     sigma_ltd = std_demand * np.sqrt(lead_time)
-#     rop_floor, rop_ceil = int(max(0, avg_ltd)), int(avg_ltd + (5.5 * sigma_ltd))
+#     rop_floor, rop_ceil = int(max(0, avg_ltd)), int(avg_ltd + (6.0 * sigma_ltd))
 
-#     # --- 2. LIVE TRACKING PLACEHOLDERS ---
+#     # --- 2. OPTIMIZATION ENGINE ---
 #     if st.button("🚀 Run Vectorized Optimization"):
 #         start_time = time.time()
-        
-#         # Placeholders for live updates
 #         progress_bar = st.progress(0)
 #         status_text = st.empty()
-#         table_placeholder = st.empty() # This will show the stepwise progress
+#         table_placeholder = st.empty()
         
 #         # Pre-generate Demand Matrix
 #         demand_matrix = np.maximum(0, np.random.normal(avg_demand, std_demand, (num_sim, num_days))).round()
         
-#         # Initialize Population
+#         # Initialize Population [ROP, Q]
 #         bounds = [(rop_floor, rop_ceil), (100, int(avg_demand * 45))]
 #         pop = [[np.random.randint(b[0], b[1]) for b in bounds] for _ in range(num_pop)]
         
-#         stepwise_data = [] # To store the best of each generation
+#         stepwise_data = []
 #         history = []
 
 #         for gen in range(num_gen):
 #             fitness_scores = []
+#             gen_metrics = [] # To store actual performance for the summary
             
 #             for r_t, q_t in pop:
-#                 # Vectorized Simulation
+#                 # --- VECTORIZED SIMULATION ---
 #                 inventory = np.full(num_sim, opening_balance, dtype=float)
 #                 arrival_days = np.full(num_sim, -1)
-#                 so_days, total_unmet, h_costs, orders = np.zeros(num_sim), np.zeros(num_sim), np.zeros(num_sim), np.zeros(num_sim)
+#                 so_days, total_unmet, h_costs, orders = [np.zeros(num_sim) for _ in range(4)]
+                
+#                 # To track P99 Peak WC, we need to find the max inventory in each scenario
+#                 scenario_peaks = np.zeros(num_sim)
 
 #                 for d in range(num_days):
 #                     arrived = (arrival_days == d)
@@ -573,76 +586,98 @@ with tab2:
 #                     shortfall = np.maximum(0, d_today - inventory)
 #                     so_days[shortfall > 0] += 1
 #                     total_unmet += shortfall
+                    
 #                     inventory = np.maximum(0, inventory - d_today)
 #                     h_costs += (inventory * (unit_value * holding_cost_rate / 365))
+                    
+#                     # Track peaks per scenario
+#                     scenario_peaks = np.maximum(scenario_peaks, inventory)
                     
 #                     reorder_mask = (inventory <= r_t) & (arrival_days == -1)
 #                     arrival_days[reorder_mask] = d + lead_time
 #                     orders[reorder_mask] += 1
 
+#                 # --- CALCULATE METRICS ---
 #                 fill_rates = (1 - (total_unmet / demand_matrix.sum(axis=1))) * 100
 #                 scenario_costs = h_costs + (orders * ordering_cost)
+#                 peak_wc_values = scenario_peaks * unit_value
                 
-#                 # Metrics for Fitness
-#                 p99_so, p1_fr, avg_cost = np.percentile(so_days, 99), np.percentile(fill_rates, 1), np.mean(scenario_costs)
+#                 p99_so = np.percentile(so_days, 99)
+#                 p1_fr = np.percentile(fill_rates, 1)
+#                 p99_wc = np.percentile(peak_wc_values, 99)
+#                 avg_cost = np.mean(scenario_costs)
 
-#                 if p99_so <= target_so_days and p1_fr >= target_fr:
-#                     score = avg_cost
-#                 else:
-#                     score = avg_cost * 1000 * (1 + (p99_so - target_so_days) + (target_fr - p1_fr))
+#                 # --- THE SMART PENALTY ENGINE ---
+#                 penalty = 0
+#                 if use_so_constraint and p99_so > target_so_days:
+#                     penalty += (p99_so - target_so_days) * 10000
+#                 if use_wc_constraint and p99_wc > max_wc_allowed:
+#                     penalty += (p99_wc - max_wc_allowed) * 20 # Stronger penalty for cash
+#                 if p1_fr < target_fr:
+#                     penalty += (target_fr - p1_fr) * 15000
                 
+#                 score = avg_cost + penalty
 #                 fitness_scores.append(score)
+#                 gen_metrics.append({'cost': avg_cost, 'p99_wc': p99_wc, 'p99_so': p99_so, 'p1_fr': p1_fr})
 
-#             # --- RECORD STEPWISE PROGRESS ---
-#             ranked = [x for _, x in sorted(zip(fitness_scores, pop))]
-#             best_score = min(fitness_scores)
-#             is_feasible = "✅ Yes" if best_score < 1e7 else "❌ No"
+#             # --- SELECTION & EVOLUTION ---
+#             ranked_indices = np.argsort(fitness_scores)
+#             ranked_pop = [pop[i] for i in ranked_indices]
+#             best_idx = ranked_indices[0]
             
-#             # Save the best policy of this generation to the log
+#             # Record stepwise progress
+#             best_pol = ranked_pop[0]
+#             best_m = gen_metrics[best_idx]
+            
 #             stepwise_data.append({
 #                 "Gen": gen + 1,
-#                 "Best ROP": ranked[0][0],
-#                 "Best Qty": ranked[0][1],
-#                 "Annual Cost": f"₹{round(best_score, 0)}" if best_score < 1e7 else "Penalized",
-#                 "Feasible?": is_feasible
+#                 "ROP": best_pol[0],
+#                 "Qty": best_pol[1],
+#                 "Avg Cost": f"₹{round(best_m['cost'],0):,}",
+#                 "Peak WC (P99)": f"₹{round(best_m['p99_wc'],0):,}",
+#                 "SO Days (P99)": round(best_m['p99_so'], 1)
 #             })
-            
-#             # UPDATE LIVE TABLE
-#             # import pandas as pd
-#             table_placeholder.table(pd.DataFrame(stepwise_data).set_index("Gen"))
-            
-#             history.append(best_score if best_score < 1e7 else None)
-            
-#             # Evolution Step
-#             new_pop = ranked[:2]
+#             table_placeholder.table(pd.DataFrame(stepwise_data).set_index("Gen").tail(5))
+#             history.append(fitness_scores[best_idx] if fitness_scores[best_idx] < 1e7 else None)
+
+#             # Genetic Crossover & Mutation
+#             new_pop = ranked_pop[:4] # Elitism
 #             while len(new_pop) < num_pop:
-#                 p1, p2 = random.sample(ranked[:8], 2)
+#                 p1, p2 = random.sample(ranked_pop[:12], 2)
 #                 child = [int((p1[0]+p2[0])/2), int((p1[1]+p2[1])/2)]
-#                 if np.random.random() < 0.2:
-#                     child[0] = np.clip(child[0] + np.random.randint(-30, 30), rop_floor, rop_ceil)
+#                 if np.random.random() < 0.3: # Mutation
+#                     child[0] = np.clip(child[0] + np.random.randint(-25, 25), rop_floor, rop_ceil)
 #                 new_pop.append(child)
 #             pop = new_pop
             
 #             progress_bar.progress((gen + 1) / num_gen)
-#             status_text.text(f"Processing Generation {gen+1} of {num_gen}...")
+#             status_text.text(f"Optimizing... Generation {gen+1}/{num_gen}")
 
-#         # --- FINAL DISPLAY ---
-#         st.success(f"Optimization finished in {round(time.time()-start_time, 2)}s")
+#         # --- 3. FINAL RESULTS & SESSION STATE ---
+#         st.success(f"Optimization Complete in {round(time.time()-start_time, 2)}s")
+        
+#         # Save to session state for Tab 4
+#         best_final_r, best_final_q = ranked_pop[0]
+#         st.session_state.best_policy = [best_final_r, best_final_q]
+        
+#         # Final Constraint Summary Display
+#         st.subheader("✅ Optimized Strategy Summary")
+#         s1, s2, s3 = st.columns(3)
+#         with s1:
+#             wc_ok = not use_wc_constraint or best_m['p99_wc'] <= max_wc_allowed
+#             st.metric("Peak WC (P99)", f"₹{round(best_m['p99_wc'],0):,}", 
+#                       delta="Met" if wc_ok else "Over Limit", delta_color="normal" if wc_ok else "inverse")
+#         with s2:
+#             so_ok = not use_so_constraint or best_m['p99_so'] <= target_so_days
+#             st.metric("Worst-Case Stockouts", f"{round(best_m['p99_so'],1)} Days", 
+#                       delta="Met" if so_ok else "Over Limit", delta_color="normal" if so_ok else "inverse")
+#         with s3:
+#             fr_ok = best_m['p1_fr'] >= target_fr
+#             st.metric("Min. Fill Rate (P1)", f"{round(best_m['p1_fr'],2)}%", 
+#                       delta="Met" if fr_ok else "Below Target", delta_color="normal" if fr_ok else "inverse")
 
-#         # CARRYING THE RESULT TO TAB4
-#         best_r = ranked[0][0]
-#         best_q = ranked[0][1]
-#         st.session_state.best_policy = [best_r, best_q]
-#         # -------------------------------
-#         plot_history = [h for h in history if h is not None]
-#         if plot_history:
-#             st.plotly_chart(px.line(y=plot_history, title="Minima Convergence Plot", labels={'y':'Cost ₹','x':'Gen'}, markers=True))
-
-#         # Optional: Add metrics so you can see the results in Tab 3 immediately
-#         c1, c2 = st.columns(2)
-#         c1.metric("Optimized ROP", best_r)
-#         c2.metric("Optimized Qty", best_q)
-
+#         if history:
+#             st.plotly_chart(px.line(y=history, title="Minima Convergence Plot (Fitness Score)", markers=True))
 
 with tab3:
     st.header("🧬 AI Inventory Optimizer")
@@ -671,7 +706,7 @@ with tab3:
     # Statistical Search Space
     avg_ltd = avg_demand * lead_time
     sigma_ltd = std_demand * np.sqrt(lead_time)
-    rop_floor, rop_ceil = int(max(0, avg_ltd)), int(avg_ltd + (6.0 * sigma_ltd))
+    rop_floor, rop_ceil = int(max(0, avg_ltd - (1.0 * sigma_ltd))), int(avg_ltd + (6.0 * sigma_ltd))
 
     # --- 2. OPTIMIZATION ENGINE ---
     if st.button("🚀 Run Vectorized Optimization"):
@@ -680,7 +715,7 @@ with tab3:
         status_text = st.empty()
         table_placeholder = st.empty()
         
-        # Pre-generate Demand Matrix
+        # Pre-generate Demand Matrix (Guarding against negative demand)
         demand_matrix = np.maximum(0, np.random.normal(avg_demand, std_demand, (num_sim, num_days))).round()
         
         # Initialize Population [ROP, Q]
@@ -692,35 +727,44 @@ with tab3:
 
         for gen in range(num_gen):
             fitness_scores = []
-            gen_metrics = [] # To store actual performance for the summary
+            gen_metrics = [] 
             
             for r_t, q_t in pop:
-                # --- VECTORIZED SIMULATION ---
+                # --- RECTIFIED VECTORIZED SIMULATION ---
                 inventory = np.full(num_sim, opening_balance, dtype=float)
-                arrival_days = np.full(num_sim, -1)
-                so_days, total_unmet, h_costs, orders = [np.zeros(num_sim) for _ in range(4)]
                 
-                # To track P99 Peak WC, we need to find the max inventory in each scenario
+                # NEW: Pipeline Arrivals Matrix (Scenarios x Timeline)
+                # We add lead_time buffer to the array size to prevent index errors
+                arrivals_matrix = np.zeros((num_sim, num_days + lead_time + 1))
+                
+                so_days, total_unmet, h_costs, orders = [np.zeros(num_sim) for _ in range(4)]
                 scenario_peaks = np.zeros(num_sim)
 
                 for d in range(num_days):
-                    arrived = (arrival_days == d)
-                    inventory[arrived] += q_t
-                    arrival_days[arrived] = -1
+                    # A. Inbound: Add arriving stock for today
+                    inventory += arrivals_matrix[:, d]
                     
+                    # B. Demand & Stockouts
                     d_today = demand_matrix[:, d]
                     shortfall = np.maximum(0, d_today - inventory)
                     so_days[shortfall > 0] += 1
                     total_unmet += shortfall
                     
+                    # C. Inventory Update
                     inventory = np.maximum(0, inventory - d_today)
                     h_costs += (inventory * (unit_value * holding_cost_rate / 365))
-                    
-                    # Track peaks per scenario
                     scenario_peaks = np.maximum(scenario_peaks, inventory)
                     
-                    reorder_mask = (inventory <= r_t) & (arrival_days == -1)
-                    arrival_days[reorder_mask] = d + lead_time
+                    # D. NEW: Pipeline Logic (Inventory Position)
+                    # Check what is already "on the water" for each scenario
+                    in_transit = arrivals_matrix[:, d+1:].sum(axis=1)
+                    inv_position = inventory + in_transit
+                    
+                    # E. Reorder if Position <= ROP
+                    reorder_mask = (inv_position <= r_t)
+                    
+                    # Schedule arrival exactly LT days in the future
+                    arrivals_matrix[reorder_mask, d + lead_time] += q_t
                     orders[reorder_mask] += 1
 
                 # --- CALCULATE METRICS ---
@@ -738,7 +782,7 @@ with tab3:
                 if use_so_constraint and p99_so > target_so_days:
                     penalty += (p99_so - target_so_days) * 10000
                 if use_wc_constraint and p99_wc > max_wc_allowed:
-                    penalty += (p99_wc - max_wc_allowed) * 20 # Stronger penalty for cash
+                    penalty += (p99_wc - max_wc_allowed) * 20 
                 if p1_fr < target_fr:
                     penalty += (target_fr - p1_fr) * 15000
                 
@@ -751,7 +795,6 @@ with tab3:
             ranked_pop = [pop[i] for i in ranked_indices]
             best_idx = ranked_indices[0]
             
-            # Record stepwise progress
             best_pol = ranked_pop[0]
             best_m = gen_metrics[best_idx]
             
@@ -771,7 +814,7 @@ with tab3:
             while len(new_pop) < num_pop:
                 p1, p2 = random.sample(ranked_pop[:12], 2)
                 child = [int((p1[0]+p2[0])/2), int((p1[1]+p2[1])/2)]
-                if np.random.random() < 0.3: # Mutation
+                if np.random.random() < 0.3: 
                     child[0] = np.clip(child[0] + np.random.randint(-25, 25), rop_floor, rop_ceil)
                 new_pop.append(child)
             pop = new_pop
@@ -782,11 +825,9 @@ with tab3:
         # --- 3. FINAL RESULTS & SESSION STATE ---
         st.success(f"Optimization Complete in {round(time.time()-start_time, 2)}s")
         
-        # Save to session state for Tab 4
         best_final_r, best_final_q = ranked_pop[0]
         st.session_state.best_policy = [best_final_r, best_final_q]
         
-        # Final Constraint Summary Display
         st.subheader("✅ Optimized Strategy Summary")
         s1, s2, s3 = st.columns(3)
         with s1:
@@ -804,7 +845,6 @@ with tab3:
 
         if history:
             st.plotly_chart(px.line(y=history, title="Minima Convergence Plot (Fitness Score)", markers=True))
-
 
 with tab4:
     st.header("🛡️ Strategy Validation & Impact")

@@ -950,18 +950,15 @@ with tab3:
 
 with tab4:
     st.header("🛡️ Strategy Validation & Impact")
-    st.write("Compare your **Manual Policy** against the **AI Optimized Policy** under 10,000 extreme scenarios.")
-
-    # 1. SESSION STATE BRIDGE
+    
     if 'best_policy' not in st.session_state:
-        st.warning("⚠️ No Optimized Policy found. Please run the AI Optimizer in Tab 3 first.")
+        st.warning("⚠️ Please run the AI Optimizer in Tab 3 first.")
         st.stop()
     else:
         opt_r, opt_q = st.session_state.best_policy
 
-    # 2. SIMULATION ENGINE
     if st.button("🏁 Run Final 10,000 Scenario Stress Test"):
-        with st.status("Simulating 10,000 'Worst-Case' Years...", expanded=True) as status:
+        with st.status("Simulating 10,000 Scenarios...", expanded=True) as status:
             n_stress = 10000
             stress_demands = np.maximum(0, np.random.normal(avg_demand, std_demand, (n_stress, num_days))).round()
             total_stress_demand = stress_demands.sum(axis=1)
@@ -971,98 +968,85 @@ with tab4:
                 inv = np.full(n_stress, opening_balance, dtype=float)
                 arrivals = np.zeros((n_stress, num_days + lead_time + 1))
                 pipeline_total = np.zeros(n_stress)
-                
                 so_days, total_unmet, h_costs, orders = [np.zeros(n_stress) for _ in range(4)]
-                scenario_peaks = np.zeros(n_stress)
                 
                 for d in range(num_days):
                     landing = arrivals[:, d]
                     inv += landing
                     pipeline_total -= landing
-                    
                     d_t = stress_demands[:, d]
                     inv -= d_t
-                    
                     out_mask = (inv < 0)
                     if np.any(out_mask):
                         so_days[out_mask] += 1
                         total_unmet[out_mask] -= inv[out_mask]
                         inv[out_mask] = 0
-                    
-                    scenario_peaks = np.maximum(scenario_peaks, inv)
-                    h_costs += (inv * daily_h_unit)
-                    
                     inv_pos = inv + pipeline_total
                     reorder_mask = (inv_pos <= r)
                     if np.any(reorder_mask):
                         arrivals[reorder_mask, d + lead_time] += q
                         pipeline_total[reorder_mask] += q
                         orders[reorder_mask] += 1
+                    h_costs += (inv * daily_h_unit)
                 
                 fr = (1 - (total_unmet / total_stress_demand)) * 100
-                return {
-                    "avg_fr": fr.mean(), 
-                    "avg_so": so_days.mean(), 
-                    "avg_cost": (h_costs + (orders * ordering_cost)).mean(), 
-                    "p99_wc": np.percentile(scenario_peaks, 99) * unit_value,
-                    "p99_so": np.percentile(so_days, 99)
-                }
+                return {"avg_fr": fr.mean(), "avg_so": so_days.mean(), "avg_cost": (h_costs + (orders * ordering_cost)).mean()}
 
             st.session_state.m_res = run_stress_sim(reorder_point, order_qty)
             st.session_state.a_res = run_stress_sim(opt_r, opt_q)
             st.session_state.stress_test_done = True
-            status.update(label="✅ Stress Test Complete!", state="complete")
+            status.update(label="✅ Test Complete!", state="complete")
 
-    # 3. DISPLAY RESULTS
     if st.session_state.get('stress_test_done'):
-        m_res, a_res = st.session_state.m_res, st.session_state.a_res
+        m, a = st.session_state.m_res, st.session_state.a_res
         
-        # Table Comparison
-        df_comp = pd.DataFrame([
-            {"Metric": "Reorder Point", "Manual": float(reorder_point), "AI Optimized": float(opt_r), "LowerIsBetter": None},
-            {"Metric": "Order Quantity", "Manual": float(order_qty), "AI Optimized": float(opt_q), "LowerIsBetter": None},
-            {"Metric": "Avg Fill Rate (%)", "Manual": m_res['avg_fr'], "AI Optimized": a_res['avg_fr'], "LowerIsBetter": False},
-            {"Metric": "Worst-Case Stockouts (P99)", "Manual": m_res['p99_so'], "AI Optimized": a_res['p99_so'], "LowerIsBetter": True},
-            {"Metric": "Annual Total Cost (₹)", "Manual": m_res['avg_cost'], "AI Optimized": a_res['avg_cost'], "LowerIsBetter": True}
-        ])
+        # 1. Create a clean comparison dataframe
+        # Added 'Status' column to drive the color icons
+        data = [
+            {"Metric": "Annual Total Cost (₹)", "Manual": m['avg_cost'], "AI Optimized": a['avg_cost'], "Better": a['avg_cost'] < m['avg_cost']},
+            {"Metric": "Avg Fill Rate (%)", "Manual": m['avg_fr'], "AI Optimized": a['avg_fr'], "Better": a['avg_fr'] > m['avg_fr']},
+            {"Metric": "Avg Stockout Days", "Manual": m['avg_so'], "AI Optimized": a['avg_so'], "Better": a['avg_so'] < m['avg_so']}
+        ]
+        df_display = pd.DataFrame(data)
 
+        # 2. Policy Comparison Table with Conditional Formatting (Column Config)
         st.write("### ⚖️ Policy Comparison")
-        # FIXED: Using .style.format instead of .format
-        st.dataframe(df_comp.style.format({"Manual": "{:,.2f}", "AI Optimized": "{:,.2f}"}), use_container_width=True)
+        st.dataframe(
+            df_display,
+            column_config={
+                "Better": st.column_config.CheckboxColumn("Efficiency Gain?", help="Check indicates AI performed better"),
+                "Manual": st.column_config.NumberColumn(format="₹ %.2f"),
+                "AI Optimized": st.column_config.NumberColumn(format="₹ %.2f"),
+            },
+            hide_index=True,
+            use_container_width=True
+        )
 
-        # 4. STRATEGIC KPIs (Red for Inefficiency)
+        # 3. FIXED KPIs: Using delta_color to show red/green
         st.divider()
         st.write("### 💰 Strategic Financial Impact")
         k1, k2, k3 = st.columns(3)
         
-        savings = m_res['avg_cost'] - a_res['avg_cost']
-        wc_delta = m_res['p99_wc'] - a_res['p99_wc']
-        fr_delta = a_res['avg_fr'] - m_res['avg_fr']
+        cost_saved = m['avg_cost'] - a['avg_cost']
+        fr_gain = a['avg_fr'] - m['avg_fr']
+        so_reduced = m['avg_so'] - a['avg_so']
 
-        # KPI 1: Annual Profit Impact
-        k1.metric("Annual Profit Impact", f"₹{round(abs(savings), 0):,}", 
-                  delta="Savings" if savings >= 0 else "Extra Cost", 
-                  delta_color="normal" if savings >= 0 else "inverse")
+        k1.metric("Profit Impact", f"₹{abs(cost_saved):,.0f}", 
+                  delta="Savings" if cost_saved >= 0 else "Loss", 
+                  delta_color="normal" if cost_saved >= 0 else "inverse")
         
-        # KPI 2: Working Capital (Liquidity)
-        k2.metric("Working Capital Delta", f"₹{round(abs(wc_delta), 0):,}", 
-                  delta="Cash Unlocked" if wc_delta >= 0 else "Extra Capital",
-                  delta_color="normal" if wc_delta >= 0 else "inverse")
-        
-        # KPI 3: Reliability Jump
-        k3.metric("Service Level Gain", f"{round(fr_delta, 2)}%", 
-                  delta="Reliability Up" if fr_delta >= 0 else "Reliability Down",
-                  delta_color="normal" if fr_delta >= 0 else "inverse")
+        k2.metric("Service Level", f"{a['avg_fr']:.2f}%", 
+                  delta=f"{fr_gain:+.2f}%", 
+                  delta_color="normal" if fr_gain >= 0 else "inverse")
 
-        # 5. EXPORT (Properly handling scalars)
-        report_data = {
-            "Metric": ["Avg Fill Rate", "Avg Stockout Days", "Total Cost", "Peak WC"],
-            "Manual": [m_res['avg_fr'], m_res['avg_so'], m_res['avg_cost'], m_res['p99_wc']],
-            "AI Optimized": [a_res['avg_fr'], a_res['avg_so'], a_res['avg_cost'], a_res['p99_wc']]
-        }
-        report_df = pd.DataFrame(report_data)
-        st.download_button("📥 Download Full Report", report_df.to_csv(index=False), "inventory_report.csv")
+        k3.metric("Reliability", f"{a['avg_so']:.1f} days", 
+                  delta=f"{-so_reduced:+.1f} days", 
+                  delta_color="normal" if so_reduced >= 0 else "inverse")
 
+        # 4. FIXED EXPORT (The solution to your ValueError)
+        # We pass an explicit index to prevent the "scalar values" error
+        report_df = pd.DataFrame([m, a], index=["Manual Policy", "AI Policy"]).T
+        st.download_button("📥 Download Summary Report", report_df.to_csv(), "inventory_report.csv")
 
 with tab5:
     st.header("📋 Executive Summary & Action Plan")

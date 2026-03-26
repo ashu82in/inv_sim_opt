@@ -13,8 +13,12 @@ if 'req_fill_rate' not in st.session_state:
     st.session_state.req_fill_rate = 95.0
 if 'req_so_days' not in st.session_state:
     st.session_state.req_so_days = 2
+# if 'best_policy' not in st.session_state:
+#     st.session_state.best_policy = None
 if 'best_policy' not in st.session_state:
     st.session_state.best_policy = None
+if 'stress_test_done' not in st.session_state:
+    st.session_state.stress_test_done = False
 
 st.set_page_config(layout="wide")
 st.title("📦 Inventory Policy & Risk Simulator")

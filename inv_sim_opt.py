@@ -335,6 +335,13 @@ with tab2:
 
 
 with tab3:
+    # Use 'key' to automatically sync with session_state
+    st.session_state.req_fill_rate = st.slider("Target Annual Fill Rate (%)", 85.0, 100.0, 
+                                              value=st.session_state.req_fill_rate, key="fill_rate_slider")
+    st.session_state.req_so_days = st.number_input("Target Max Stockout Days", 
+                                                   value=st.session_state.req_so_days, key="so_days_input")
+
+    
     st.subheader("⚡ Ultra-Fast Vectorized Optimizer")
     
     # 1. DYNAMIC STATISTICAL BOUNDS

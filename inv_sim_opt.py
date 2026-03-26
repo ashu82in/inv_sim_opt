@@ -327,95 +327,119 @@ with tab2:
 
 
 with tab3:
-    st.subheader("🧬 Hybrid Statistical-Genetic Optimizer")
-    st.write("Using Statistical Bounds to prune the search space for 99% Reliability.")
+    st.subheader("📉 Lean Hybrid Optimizer (Cost vs. Service)")
+    st.write("This version finds the lowest ROP that satisfies your **Annual Fill Rate** and **Stockout Days** targets.")
 
-    # --- 1. CALCULATE STATISTICAL BOUNDS ---
-    # We use Z-scores to define the 'Logical Search Zone'
-    z_floor = 1.96  # ~97.5% confidence floor
-    z_ceil = 4.50   # ~99.99% confidence ceiling (The "Safety Limit")
-    
-    sigma_ltd = std_demand * np.sqrt(lead_time)
+    # --- 1. DYNAMIC LEAN BOUNDS ---
+    # We calculate the Mean Lead Time Demand (Avg LTD)
+    # This is the "Zero Safety Stock" point. 
     avg_ltd = avg_demand * lead_time
+    sigma_ltd = std_demand * np.sqrt(lead_time)
     
-    rop_floor = int(max(0, avg_ltd + (z_floor * sigma_ltd)))
-    rop_ceil = int(avg_ltd + (z_ceil * sigma_ltd))
-    
-    st.info(f"💡 **Search Bound set:** ROP will only be tested between **{rop_floor}** and **{rop_ceil}** units. "
-            f"This ignores millions of non-viable policies instantly.")
+    # Floor: Just the average demand (50% Cycle Service Level)
+    # Ceiling: 5 Standard Deviations (Covers extreme spikes)
+    rop_floor = int(max(0, avg_ltd)) 
+    rop_ceil = int(avg_ltd + (5.0 * sigma_ltd))
 
-    # --- 2. OPTIMIZATION INPUTS ---
+    st.info(f"💡 **Lean Strategy:** Search starts at ROP = {rop_floor} (Avg Lead Time Demand). "
+            f"This allows the model to explore 'Lower Stock' options that still meet your annual goals.")
+
+    # --- 2. OPTIMIZATION CONTROLS ---
     c_opt1, c_opt2 = st.columns(2)
     with c_opt1:
-        req_fill_rate = st.slider("Target Fill Rate (%)", 85.0, 100.0, 98.0)
-        req_so_days = st.number_input("Target Max Stockout Days", value=2)
+        req_fill_rate = st.slider("Target Annual Fill Rate (%)", 85.0, 100.0, 95.0)
+        req_so_days = st.number_input("Target Max Stockout Days (Annual)", value=2)
     with c_opt2:
-        # Since we have bounds, we can use a smaller population and fewer generations
-        pop_size = 20 
-        generations = 6 
-        scenarios_per_test = 2000
+        pop_size = 24 
+        generations = 8 
+        scenarios_per_test = 2000 
 
-    if st.button("🚀 Run Hybrid Optimization"):
+    if st.button("🚀 Run Lean Optimization"):
         import random
         start_time = time.time()
         
-        # Search neighborhood using our new bounds
+        # Define search neighborhood
         bounds = [(rop_floor, rop_ceil), (100, int(avg_demand * 45))]
         
         # Pre-calculate demands
         all_future_demands = np.maximum(0, np.random.normal(avg_demand, std_demand, (scenarios_per_test, num_days))).round()
         
         pop = [[np.random.randint(b[0], b[1]) for b in bounds] for _ in range(pop_size)]
+        
         progress_bar = st.progress(0)
-        history = []
+        with st.status("🧬 Searching for the Leanest Reliable Policy...", expanded=True) as status:
+            history = []
+            for gen in range(generations):
+                fitness_scores = []
+                feasible_count = 0
+                
+                for individual in pop:
+                    r_t, q_t = individual[0], individual[1]
+                    so_results, fr_results, cost_results = [], [], []
+                    
+                    for i in range(scenarios_per_test):
+                        df_s, _, m = run_full_simulation(all_future_demands[i], r_t, q_t, num_days, opening_balance, 
+                                                       lead_time, unit_value, holding_cost_rate, ordering_cost, calc_aging=False)
+                        
+                        # Calculate Fill Rate for this scenario
+                        total_d = all_future_demands[i].sum()
+                        unmet = df_s[df_s["Closing Balance"] == 0]["Demand"].sum()
+                        f_rate = ((total_d - unmet) / total_d * 100) if total_d > 0 else 100
+                        
+                        so_results.append(m['stockout_days'])
+                        fr_results.append(f_rate)
+                        cost_results.append(m['total_cost'])
+                    
+                    # --- DUAL CONSTRAINT CHECK (99th Percentile Risk) ---
+                    p99_so = np.percentile(so_results, 99)
+                    p1_fr = np.percentile(fr_results, 1) # Worst 1% case for Fill Rate
+                    avg_cost = np.mean(cost_results)
+                    
+                    # Policy must satisfy BOTH: Max Stockout Days AND Target Fill Rate
+                    is_safe = (p99_so <= req_so_days) and (p1_fr >= req_fill_rate)
+                    
+                    if is_safe:
+                        fitness_score = avg_cost
+                        feasible_count += 1
+                    else:
+                        # Penalty logic
+                        so_gap = max(0, p99_so - req_so_days)
+                        fr_gap = max(0, req_fill_rate - p1_fr)
+                        fitness_score = avg_cost * 500 * (so_gap + fr_gap + 1)
+                    
+                    fitness_scores.append(fitness_score)
+                
+                status.write(f"📊 Gen {gen+1}: Top Policy Cost ₹{round(min(fitness_scores), 0)} ({feasible_count} Feasible)")
+                
+                # Evolution Logic
+                ranked = [x for _, x in sorted(zip(fitness_scores, pop))]
+                history.append(min(fitness_scores) if min(fitness_scores) < 1e7 else None)
+                
+                new_pop = ranked[:2] # Elitism
+                while len(new_pop) < pop_size:
+                    p1, p2 = random.sample(ranked[:8], 2)
+                    child = [int((p1[0] + p2[0])/2), int((p1[1] + p2[1])/2)]
+                    if np.random.random() < 0.25: # Mutation
+                        child[0] = np.clip(child[0] + np.random.randint(-40, 40), rop_floor, rop_ceil)
+                        child[1] = np.clip(child[1] + np.random.randint(-80, 80), 100, int(avg_demand * 45))
+                    new_pop.append(child)
+                pop = new_pop
+                progress_bar.progress((gen + 1) / generations)
+            
+            status.update(label="✅ Search Optimized!", state="complete", expanded=False)
 
-        for gen in range(generations):
-            fitness_scores = []
-            
-            for individual in pop:
-                r_t, q_t = individual[0], individual[1]
-                so_results, cost_results, fr_results = [], [], []
-                
-                # Optimized Simulation Loop
-                for i in range(scenarios_per_test):
-                    _, _, m = run_full_simulation(all_future_demands[i], r_t, q_t, num_days, opening_balance, 
-                                                   lead_time, unit_value, holding_cost_rate, ordering_cost, calc_aging=False)
-                    so_results.append(m['stockout_days'])
-                    cost_results.append(m['total_cost'])
-                
-                # --- CHANCE CONSTRAINT CHECK ---
-                p99_so = np.percentile(so_results, 99)
-                avg_cost = np.mean(cost_results)
-                
-                # Strict Penalty if p99 exceeds your target
-                if p99_so > req_so_days:
-                    fitness_score = avg_cost * 500 * (p99_so - req_so_days + 1)
-                else:
-                    fitness_score = avg_total_cost = avg_cost
-                
-                fitness_scores.append(fitness_score)
-            
-            # Evolution Step
-            ranked = [x for _, x in sorted(zip(fitness_scores, pop))]
-            history.append(min(fitness_scores))
-            
-            # Elitism: Keep top 2
-            new_pop = ranked[:2]
-            while len(new_pop) < pop_size:
-                p1, p2 = random.sample(ranked[:8], 2)
-                child = [int((p1[0] + p2[0])/2), int((p1[1] + p2[1])/2)]
-                if np.random.random() < 0.2: # Mutation
-                    child[0] = np.clip(child[0] + np.random.randint(-20, 20), bounds[0][0], bounds[0][1])
-                new_pop.append(child)
-            pop = new_pop
-            progress_bar.progress((gen + 1) / generations)
-
-        # --- FINAL VERIFICATION ---
+        # --- FINAL DISPLAY ---
         best_r, best_q = ranked[0][0], ranked[0][1]
         st.divider()
-        st.success(f"Optimized Policy Found in {round(time.time()-start_time, 1)}s")
         
-        r1, r2, r3 = st.columns(3)
-        r1.metric("Recommended ROP", best_r)
-        r2.metric("Recommended Qty", best_q)
-        r3.metric("Min Avg Annual Cost", f"₹{round(history[-1], 0)}")
+        r_c1, r_c2, r_c3 = st.columns(3)
+        r_c1.metric("Lean ROP", best_r)
+        r_c2.metric("Lean Order Qty (Q)", best_q)
+        r_c3.metric("Min Annual Cost", f"₹{round(np.mean(cost_results), 0)}")
+
+        # Convergence History
+        plot_data = [x for x in history if x is not None]
+        if plot_data:
+            st.plotly_chart(px.line(y=plot_data, title="Cost Optimization Path", labels={'y':'Annual Cost','x':'Gen'}), use_container_width=True)
+        else:
+            st.error("No Feasible Policy Found. Try raising allowed stockout days or lowering target fill rate.")

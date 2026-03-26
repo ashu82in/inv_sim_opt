@@ -496,16 +496,20 @@ with tab3:
         c2.metric("Optimized Qty", best_q)
 
 
+import streamlit as st
+import numpy as np
+import pandas as pd
+import time
+import plotly.express as px
+
 with tab4:
     st.header("🛡️ Strategy Validation & Impact")
     st.write("Compare your **Manual Policy** against the **AI Optimized Policy** under extreme 10,000-scenario stress.")
 
     # 1. ACCESS OPTIMIZED DATA
-    # We pull the best ROP and Q found in Tab 3 from the Session State
     if 'best_policy' not in st.session_state or st.session_state.best_policy is None:
-        st.warning("⚠️ No Optimized Policy found. Please run the Optimizer in Tab 3 first to generate results.")
-        # Fallback values for layout testing only
-        opt_r, opt_q = reorder_point, order_qty 
+        st.warning("⚠️ No Optimized Policy found. Please run the Optimizer in Tab 3 first.")
+        opt_r, opt_q = 0, 0 # Fallback
     else:
         opt_r, opt_q = st.session_state.best_policy
 
@@ -513,14 +517,12 @@ with tab4:
     if st.button("🏁 Run Final 10,000 Scenario Stress Test"):
         with st.status("Simulating 10,000 'Worst-Case' Years...", expanded=True) as status:
             n_stress = 10000
-            # Generate one massive demand matrix to test both policies identically
             stress_demands = np.maximum(0, np.random.normal(avg_demand, std_demand, (n_stress, num_days))).round()
             
-            # High-Speed Vectorized Simulation Function
             def run_stress_sim(r, q):
                 inv = np.full(n_stress, opening_balance, dtype=float)
                 arr = np.full(n_stress, -1)
-                so, unmet, h_cost, orders = [np.zeros(n_stress) for _ in range(4)]
+                so, unmet, h_cost, orders, daily_inv_sum = [np.zeros(n_stress) for _ in range(5)]
                 
                 for d in range(num_days):
                     mask_arr = (arr == d)
@@ -534,22 +536,25 @@ with tab4:
                     
                     inv = np.maximum(0, inv - d_t)
                     h_cost += (inv * (unit_value * holding_cost_rate / 365))
+                    daily_inv_sum += inv
                     
                     mask_re = (inv <= r) & (arr == -1)
                     arr[mask_re] = d + lead_time
                     orders[mask_re] += 1
                 
-                fill_rates = (1 - (unmet / stress_demands.sum(axis=1))) * 100
-                total_costs = h_cost + (orders * ordering_cost)
+                fr = (1 - (unmet / stress_demands.sum(axis=1))) * 100
+                total_c = h_cost + (orders * ordering_cost)
+                avg_wc = (daily_inv_sum / num_days) * unit_value
+                
                 return {
-                    "fr_raw": fill_rates,
-                    "avg_fr": fill_rates.mean(),
+                    "fr_raw": fr,
+                    "avg_fr": fr.mean(),
                     "avg_so": so.mean(),
-                    "avg_cost": total_costs.mean(),
+                    "avg_cost": total_c.mean(),
+                    "avg_wc": avg_wc.mean(),
                     "p99_so": np.percentile(so, 99)
                 }
 
-            # Run both simulations side-by-side
             manual_res = run_stress_sim(reorder_point, order_qty)
             ai_res = run_stress_sim(opt_r, opt_q)
             status.update(label="✅ Stress Test Complete!", state="complete")
@@ -557,63 +562,64 @@ with tab4:
         # 3. SIDE-BY-SIDE COMPARISON TABLE
         st.write("### ⚖️ Policy Comparison")
         comp_df = pd.DataFrame({
-            "Metric": ["Reorder Point (ROP)", "Order Quantity (Q)", "Avg Fill Rate (%)", "Avg Stockout Days", "Annual Cost (₹)", "Worst Case (P99) Stockouts"],
-            "Manual Policy": [reorder_point, order_qty, f"{manual_res['avg_fr']:.2f}%", f"{manual_res['avg_so']:.1f}", f"₹{manual_res['avg_cost']:,.0f}", f"{manual_res['p99_so']:.0f} days"],
-            "AI Optimized": [opt_r, opt_q, f"{ai_res['avg_fr']:.2f}%", f"{ai_res['avg_so']:.1f}", f"₹{ai_res['avg_cost']:,.0f}", f"{ai_res['p99_so']:.0f} days"]
+            "Metric": [
+                "Reorder Point (ROP)", 
+                "Order Quantity (Q)", 
+                "Avg Fill Rate (%)", 
+                "Avg Stockout Days", 
+                "Avg Working Capital Blocked (₹)", 
+                "Annual Total Cost (₹)", 
+                "Worst Case (P99) Stockouts"
+            ],
+            "Manual Policy": [
+                reorder_point, 
+                order_qty, 
+                f"{manual_res['avg_fr']:.2f}%", 
+                f"{manual_res['avg_so']:.1f}", 
+                f"₹{manual_res['avg_wc']:,.0f}", 
+                f"₹{manual_res['avg_cost']:,.0f}", 
+                f"{manual_res['p99_so']:.0f} days"
+            ],
+            "AI Optimized": [
+                opt_r, 
+                opt_q, 
+                f"{ai_res['avg_fr']:.2f}%", 
+                f"{ai_res['avg_so']:.1f}", 
+                f"₹{ai_res['avg_wc']:,.0f}", 
+                f"₹{ai_res['avg_cost']:,.0f}", 
+                f"{ai_res['p99_so']:.0f} days"
+            ]
         })
         st.table(comp_df)
 
-        # 4. BUSINESS IMPACT CARD
+        # 4. CASH & SAVINGS METRICS
         st.divider()
-        savings = manual_res['avg_cost'] - ai_res['avg_cost']
-        c1, c2 = st.columns([1, 2])
-        with c1:
-            st.metric("Annual Potential Savings", f"₹{round(savings, 0):,}", 
-                      delta=f"{round((savings/manual_res['avg_cost'])*100, 1)}% cheaper", delta_color="normal")
-        with c2:
-            if savings > 0:
-                st.success(f"💰 **Strategy Note:** Switching to AI-Optimized settings saves you ₹{round(savings, 0):,} while maintaining your {target_fr}% service target.")
-            else:
-                st.info("ℹ️ **Strategy Note:** Your manual policy is already highly efficient. The AI suggests a minimal tweak for safety.")
+        st.write("### 💰 Financial Impact Summary")
+        m1, m2, m3 = st.columns(3)
+        
+        annual_savings = manual_res['avg_cost'] - ai_res['avg_cost']
+        wc_delta = manual_res['avg_wc'] - ai_res['avg_wc']
+        
+        m1.metric("Annual Cost Savings", f"₹{round(annual_savings, 0):,}", 
+                  delta=f"{round((annual_savings/manual_res['avg_cost'])*100, 1)}%")
+        
+        m2.metric("Working Capital Redxn.", f"₹{round(wc_delta, 0):,}", 
+                  delta="Cash Unlocked", delta_color="normal")
+        
+        # 'Day 1 Unlock' is a conceptual metric of immediate liquidity improvement
+        m3.metric("Liquidity Buffer", f"{round((wc_delta/unit_value), 0)} Units", 
+                  help="The equivalent number of units you no longer need to keep 'trapped' in stock.")
 
-        # 5. STABILITY VISUAL (BOX PLOT)
-        st.write("### 📈 Stability Analysis (Fill Rate Spread)")
-        plot_df = pd.DataFrame({
+        # 5. FOUNDER'S STRATEGY NOTE
+        if wc_delta > 0:
+            st.success(f"🚀 **Liquidity Win:** You can 'unlock' **₹{round(wc_delta, 0):,}** in cash currently tied up in excess stock while keeping service levels at {target_fr}%.")
+        
+        # 6. STABILITY BOX PLOT
+        st.plotly_chart(px.box(pd.DataFrame({
             "Manual": manual_res['fr_raw'], 
             "AI Optimized": ai_res['fr_raw']
-        }).melt()
-        
-        fig_box = px.box(plot_df, x="variable", y="value", color="variable",
-                         title="How consistent is your Fill Rate?",
-                         labels={"value":"Fill Rate %", "variable":"Policy Selection"},
-                         color_discrete_map={"Manual": "#EF553B", "AI Optimized": "#00CC96"})
-        st.plotly_chart(fig_box, use_container_width=True)
-
-        # 6. EXECUTIVE SUMMARY & DOWNLOAD
-        st.divider()
-        st.subheader("📝 Executive Summary")
-        summary_text = f"""
-        INVENTORY STRATEGY REPORT
-        -------------------------
-        TARGET: {target_fr}% Fill Rate | {target_so_days} Day Stockout Max
-        
-        FINDINGS:
-        The AI Optimized policy (ROP: {opt_r}, Q: {opt_q}) 
-        is expected to result in an annual cost of ₹{ai_res['avg_cost']:,.0f}.
-        This represents a savings of ₹{savings:,.0f} over the current manual approach.
-        
-        RISK PROFILE:
-        In the worst 1% of simulated years, the AI policy results in {ai_res['p99_so']} days 
-        out of stock, meeting the reliability requirement.
-        """
-        st.text_area("Talking Points for Presentation:", summary_text, height=200)
-        
-        st.download_button(
-            label="📥 Download Detailed Stress Test (CSV)",
-            data=plot_df.to_csv(index=False).encode('utf-8'),
-            file_name='inventory_policy_comparison.csv',
-            mime='text/csv',
-        )
-
+        }).melt(), x="variable", y="value", color="variable",
+        title="Reliability Consistency (Fill Rate % Spread)",
+        color_discrete_map={"Manual": "#EF553B", "AI Optimized": "#00CC96"}), use_container_width=True)
 
 

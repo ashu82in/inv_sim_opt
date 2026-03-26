@@ -983,9 +983,7 @@ with tab4:
                         total_unmet[out_mask] -= inv[out_mask]
                         inv[out_mask] = 0
                     
-                    # TRACKING PEAK FOR WORKING CAPITAL
                     scenario_peaks = np.maximum(scenario_peaks, inv)
-                    
                     inv_pos = inv + pipeline_total
                     reorder_mask = (inv_pos <= r)
                     if np.any(reorder_mask):
@@ -999,7 +997,7 @@ with tab4:
                     "avg_fr": fr.mean(), 
                     "avg_so": so_days.mean(), 
                     "avg_cost": (h_costs + (orders * ordering_cost)).mean(),
-                    "p99_wc": np.percentile(scenario_peaks, 99) * unit_value # FIX: Added this key
+                    "p99_wc": np.percentile(scenario_peaks, 99) * unit_value
                 }
 
             st.session_state.m_res = run_stress_sim(reorder_point, order_qty)
@@ -1010,7 +1008,7 @@ with tab4:
     if st.session_state.get('stress_test_done'):
         m, a = st.session_state.m_res, st.session_state.a_res
         
-        # 1. DATAFRAME GENERATION
+        # 1. TABLE DATA
         df_comp = pd.DataFrame([
             {"Metric": "Reorder Point", "Manual": float(reorder_point), "AI Optimized": float(opt_r), "Goal": "N/A"},
             {"Metric": "Order Quantity", "Manual": float(order_qty), "AI Optimized": float(opt_q), "Goal": "N/A"},
@@ -1019,28 +1017,25 @@ with tab4:
             {"Metric": "Avg Stockout Days", "Manual": m['avg_so'], "AI Optimized": a['avg_so'], "Goal": "Lower"}
         ])
 
-        # 2. SELECTIVE COLOR CODING (Only for results, not inputs)
-        def color_results_only(row):
+        # 2. SELECTIVE COLOR CODING (Skip ROP/Qty)
+        def color_logic(row):
             styles = [''] * len(row)
-            manual, ai, goal = row['Manual'], row['AI Optimized'], row['Goal']
-            
+            man, opt, goal = row['Manual'], row['AI Optimized'], row['Goal']
             if goal == "Lower":
-                color = "#2e7d32" if ai < manual else "#c62828"
+                color = "#2e7d32" if opt < man else "#c62828"
                 styles[2] = f"background-color: {color}; color: white"
             elif goal == "Higher":
-                color = "#2e7d32" if ai > manual else "#c62828"
+                color = "#2e7d32" if opt > man else "#c62828"
                 styles[2] = f"background-color: {color}; color: white"
-            
             return styles
 
         st.write("### ⚖️ Policy Comparison")
         st.dataframe(
-            df_comp.style.apply(color_results_only, axis=1).format({"Manual": "{:,.2f}", "AI Optimized": "{:,.2f}"}),
-            use_container_width=True,
-            hide_index=True
+            df_comp.style.apply(color_logic, axis=1).format({"Manual": "{:,.2f}", "AI Optimized": "{:,.2f}"}),
+            use_container_width=True, hide_index=True
         )
 
-        # 3. FIXED KPI COLOR LOGIC
+        # 3. KPI LOGIC (Correcting the Service Level Color)
         st.divider()
         st.write("### 💰 Strategic Financial Impact")
         k1, k2, k3 = st.columns(3)
@@ -1049,88 +1044,153 @@ with tab4:
         fr_gain = a['avg_fr'] - m['avg_fr']
         wc_delta = m['p99_wc'] - a['p99_wc']
 
-        # k1: Savings (Positive is Green)
         k1.metric("Profit Impact", f"₹{abs(cost_saved):,.0f}", 
                   delta="Savings" if cost_saved >= 0 else "Loss", 
-                  delta_color="normal" if cost_saved >= 0 else "inverse")
+                  delta_color="normal")
         
-        # k2: Fill Rate Gain (Positive is Green, Decrease is Red)
+        # Manually force RED if gain is negative
         k2.metric("Service Level", f"{a['avg_fr']:.2f}%", 
                   delta=f"{fr_gain:+.2f}%", 
                   delta_color="normal" if fr_gain >= 0 else "inverse")
 
-        # k3: Working Capital (Reduction/Savings is Green)
         k3.metric("Working Capital Delta", f"₹{abs(wc_delta):,.0f}", 
                   delta="Cash Unlocked" if wc_delta >= 0 else "Extra Capital", 
                   delta_color="normal" if wc_delta >= 0 else "inverse")
 
-        # 4. EXPORT FIX (Include explicit index for scalar values)
-        report_df = pd.DataFrame([m, a], index=["Manual Policy", "AI Policy"]).T
-        st.download_button("📥 Download Summary Report", report_df.to_csv(), "inventory_report.csv")
+# with tab5:
+#     st.header("📋 Executive Summary & Action Plan")
+    
+#     # 1. BRIDGE: Pull data from Tab 4 "Locker"
+#     if not st.session_state.get('stress_test_done'):
+#         st.warning("⚠️ Data Missing: Please run the 'Stress Test' in Tab 4 first to generate the board report.")
+#     else:
+#         # Retrieve persistent results
+#         m_res = st.session_state.m_res
+#         a_res = st.session_state.a_res
+#         opt_r, opt_q = st.session_state.best_policy
+        
+#         # Calculate key deltas for the narrative
+#         savings = m_res['avg_cost'] - a_res['avg_cost']
+#         wc_delta = m_res['p99_wc'] - a_res['p99_wc']
+#         fr_delta = a_res['avg_fr'] - m_res['avg_fr']
+
+#         # 2. THE BIG THREE: STRATEGIC IMPACT
+#         st.subheader("🚀 Final Strategic Impact")
+#         k1, k2, k3 = st.columns(3)
+        
+#         with k1:
+#             st.metric("Annual Profit Impact", f"₹{round(abs(savings), 0):,}", 
+#                       delta="Net Savings" if savings >= 0 else "Net Investment",
+#                       delta_color="normal" if savings >= 0 else "inverse")
+#             st.caption("Total cost change (Holding + Ordering + Stockouts)")
+
+#         with k2:
+#             st.metric("Capital Mobility", f"₹{round(abs(wc_delta), 0):,}", 
+#                       delta="Cash Unlocked" if wc_delta >= 0 else "Capital Required",
+#                       delta_color="normal" if wc_delta >= 0 else "inverse")
+#             st.caption("Peak Working Capital change (P99)")
+
+#         with k3:
+#             st.metric("Service Reliability", f"{round(a_res['avg_fr'], 2)}%", 
+#                       delta=f"{round(fr_delta, 2)}% Gain",
+#                       delta_color="normal" if fr_delta >= 0 else "inverse")
+#             st.caption("Average Fill Rate across all scenarios")
+
+#         # 3. THE FOUNDER'S CHECKLIST (Implementation Roadmap)
+#         st.divider()
+#         st.subheader("📝 Founder's Implementation Roadmap")
+        
+#         st.markdown("### Step 1: System Updates")
+#         st.checkbox(f"Update ERP/Inventory Reorder Point (ROP) from {reorder_point} ➔ **{int(opt_r)}** units")
+#         st.checkbox(f"Standardize Purchase Order Quantity (Qty) from {order_qty} ➔ **{int(opt_q)}** units")
+        
+#         st.markdown("### Step 2: Financial Allocation")
+#         if wc_delta < 0:
+#             st.error(f"🚩 **Action Required:** Secure **₹{round(abs(wc_delta), 0):,}** in additional liquidity. This 'Insurance' prevents stockouts during demand spikes.")
+#         else:
+#             st.success(f"✨ **Action:** Re-allocate **₹{round(wc_delta, 0):,}** of unlocked cash into high-growth areas like Marketing or R&D.")
+
+#         # 4. FINAL STORYTELLING ANALOGY
+#         st.divider()
+#         st.info(f"💡 **Founder's Insight:** By moving to an ROP of {int(opt_r)}, you aren't just buying stock; you are buying **Peace of Mind**. In 99% of future 'storms', your business will now remain afloat while competitors run dry.")
+
+#         # 5. EXPORT FOR BOARD REVIEW
+#         st.divider()
+#         report_df = pd.DataFrame(st.session_state.m_res).transpose() # Quick summary
+#         st.download_button(
+#             label="📥 Download Executive PDF Data",
+#             data=report_df.to_csv().encode('utf-8'),
+#             file_name=f"Executive_Summary_{pd.Timestamp.now().strftime('%Y%m%d')}.csv",
+#             mime='text/csv'
+#         )
 
 with tab5:
-    st.header("📋 Executive Summary & Action Plan")
+    st.header("📋 Executive Strategy & Action Plan")
     
-    # 1. BRIDGE: Pull data from Tab 4 "Locker"
     if not st.session_state.get('stress_test_done'):
-        st.warning("⚠️ Data Missing: Please run the 'Stress Test' in Tab 4 first to generate the board report.")
+        st.warning("⚠️ Please run the Final Stress Test in Tab 4 to generate the executive report.")
     else:
-        # Retrieve persistent results
-        m_res = st.session_state.m_res
-        a_res = st.session_state.a_res
-        opt_r, opt_q = st.session_state.best_policy
+        m = st.session_state.m_res
+        a = st.session_state.a_res
         
-        # Calculate key deltas for the narrative
-        savings = m_res['avg_cost'] - a_res['avg_cost']
-        wc_delta = m_res['p99_wc'] - a_res['p99_wc']
-        fr_delta = a_res['avg_fr'] - m_res['avg_fr']
-
-        # 2. THE BIG THREE: STRATEGIC IMPACT
-        st.subheader("🚀 Final Strategic Impact")
-        k1, k2, k3 = st.columns(3)
+        # --- THE FIX: Pass index=[0] to handle scalar values ---
+        # This converts the simulation dictionaries into a clean comparison table
+        summary_df = pd.DataFrame([m, a], index=["Manual Policy", "AI Optimized"])
         
-        with k1:
-            st.metric("Annual Profit Impact", f"₹{round(abs(savings), 0):,}", 
-                      delta="Net Savings" if savings >= 0 else "Net Investment",
-                      delta_color="normal" if savings >= 0 else "inverse")
-            st.caption("Total cost change (Holding + Ordering + Stockouts)")
+        # 1. BIG PICTURE KPIs
+        st.write("### 🚀 Strategic Impact Summary")
+        i1, i2, i3 = st.columns(3)
+        
+        annual_profit = (m['avg_cost'] - a['avg_cost'])
+        wc_unlocked = (m['p99_wc'] - a['p99_wc'])
+        reliability_change = (a['avg_fr'] - m['avg_fr'])
 
-        with k2:
-            st.metric("Capital Mobility", f"₹{round(abs(wc_delta), 0):,}", 
-                      delta="Cash Unlocked" if wc_delta >= 0 else "Capital Required",
-                      delta_color="normal" if wc_delta >= 0 else "inverse")
-            st.caption("Peak Working Capital change (P99)")
+        i1.metric("Annual Profit Impact", f"₹{abs(annual_profit):,.0f}", 
+                  delta="Increased Profit" if annual_profit >= 0 else "Decreased Profit",
+                  delta_color="normal")
+        
+        i2.metric("Working Capital Impact", f"₹{abs(wc_unlocked):,.0f}", 
+                  delta="Cash Unlocked" if wc_unlocked >= 0 else "Extra Capital Needed",
+                  delta_color="normal")
 
-        with k3:
-            st.metric("Service Reliability", f"{round(a_res['avg_fr'], 2)}%", 
-                      delta=f"{round(fr_delta, 2)}% Gain",
-                      delta_color="normal" if fr_delta >= 0 else "inverse")
-            st.caption("Average Fill Rate across all scenarios")
+        # Force RED if service level drops
+        i3.metric("Service Level Change", f"{a['avg_fr']:.2f}%", 
+                  delta=f"{reliability_change:+.2f}%", 
+                  delta_color="normal" if reliability_change >= 0 else "inverse")
 
-        # 3. THE FOUNDER'S CHECKLIST (Implementation Roadmap)
         st.divider()
-        st.subheader("📝 Founder's Implementation Roadmap")
-        
-        st.markdown("### Step 1: System Updates")
-        st.checkbox(f"Update ERP/Inventory Reorder Point (ROP) from {reorder_point} ➔ **{int(opt_r)}** units")
-        st.checkbox(f"Standardize Purchase Order Quantity (Qty) from {order_qty} ➔ **{int(opt_q)}** units")
-        
-        st.markdown("### Step 2: Financial Allocation")
-        if wc_delta < 0:
-            st.error(f"🚩 **Action Required:** Secure **₹{round(abs(wc_delta), 0):,}** in additional liquidity. This 'Insurance' prevents stockouts during demand spikes.")
-        else:
-            st.success(f"✨ **Action:** Re-allocate **₹{round(wc_delta, 0):,}** of unlocked cash into high-growth areas like Marketing or R&D.")
 
-        # 4. FINAL STORYTELLING ANALOGY
-        st.divider()
-        st.info(f"💡 **Founder's Insight:** By moving to an ROP of {int(opt_r)}, you aren't just buying stock; you are buying **Peace of Mind**. In 99% of future 'storms', your business will now remain afloat while competitors run dry.")
+        # 2. FOUNDER'S ACTION PLAN
+        st.write("### 📝 Founder's Action Plan")
+        
+        col_plan1, col_plan2 = st.columns(2)
+        
+        with col_plan1:
+            st.info("#### ✅ Immediate Actions")
+            st.markdown(f"""
+            1. **Update ROP:** Adjust system Reorder Point from **{reorder_point}** to **{st.session_state.best_policy[0]}**.
+            2. **Adjust Qty:** Set fixed Order Quantity to **{st.session_state.best_policy[1]}**.
+            3. **Monitor Lead Time:** The AI assumes a {lead_time}-day lead time. If this increases, rerun the Tab 2 Sensitivity test.
+            """)
 
-        # 5. EXPORT FOR BOARD REVIEW
-        st.divider()
-        report_df = pd.DataFrame(st.session_state.m_res).transpose() # Quick summary
-        st.download_button(
-            label="📥 Download Executive PDF Data",
-            data=report_df.to_csv().encode('utf-8'),
-            file_name=f"Executive_Summary_{pd.Timestamp.now().strftime('%Y%m%d')}.csv",
-            mime='text/csv'
-        )
+        with col_plan2:
+            if reliability_change < 0:
+                st.warning("#### ⚠️ Risk Mitigation")
+                st.write(f"""
+                The AI has prioritized **cost savings** over absolute safety. 
+                You are trading {abs(reliability_change):.2f}% of your fill rate for ₹{annual_profit:,.0f} in savings. 
+                *If this risk is unacceptable, return to Tab 3 and increase the 'Target Service Level'.*
+                """)
+            else:
+                st.success("#### 📈 Efficiency Gains")
+                st.write(f"""
+                This is a 'Win-Win' scenario. The AI has found a way to 
+                **increase reliability** while **reducing costs**. 
+                The primary gain comes from optimizing the 'Inventory Position' logic 
+                to prevent double-ordering during lead times.
+                """)
+
+        # 3. TECHNICAL AUDIT TRAIL
+        with st.expander("🔍 View Technical Simulation Data"):
+            # Transpose for easier reading
+            st.table(summary_df.T.style.format("{:.2f}"))

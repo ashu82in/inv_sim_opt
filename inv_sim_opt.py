@@ -969,6 +969,7 @@ with tab4:
                 arrivals = np.zeros((n_stress, num_days + lead_time + 1))
                 pipeline_total = np.zeros(n_stress)
                 so_days, total_unmet, h_costs, orders = [np.zeros(n_stress) for _ in range(4)]
+                scenario_peaks = np.zeros(n_stress)
                 
                 for d in range(num_days):
                     landing = arrivals[:, d]
@@ -981,6 +982,10 @@ with tab4:
                         so_days[out_mask] += 1
                         total_unmet[out_mask] -= inv[out_mask]
                         inv[out_mask] = 0
+                    
+                    # TRACKING PEAK FOR WORKING CAPITAL
+                    scenario_peaks = np.maximum(scenario_peaks, inv)
+                    
                     inv_pos = inv + pipeline_total
                     reorder_mask = (inv_pos <= r)
                     if np.any(reorder_mask):
@@ -990,7 +995,12 @@ with tab4:
                     h_costs += (inv * daily_h_unit)
                 
                 fr = (1 - (total_unmet / total_stress_demand)) * 100
-                return {"avg_fr": fr.mean(), "avg_so": so_days.mean(), "avg_cost": (h_costs + (orders * ordering_cost)).mean()}
+                return {
+                    "avg_fr": fr.mean(), 
+                    "avg_so": so_days.mean(), 
+                    "avg_cost": (h_costs + (orders * ordering_cost)).mean(),
+                    "p99_wc": np.percentile(scenario_peaks, 99) * unit_value # FIX: Added this key
+                }
 
             st.session_state.m_res = run_stress_sim(reorder_point, order_qty)
             st.session_state.a_res = run_stress_sim(opt_r, opt_q)
@@ -1000,65 +1010,61 @@ with tab4:
     if st.session_state.get('stress_test_done'):
         m, a = st.session_state.m_res, st.session_state.a_res
         
-        # 1. CREATE DATAFRAME WITH ALL ROWS
+        # 1. DATAFRAME GENERATION
         df_comp = pd.DataFrame([
-            {"Metric": "Reorder Point", "Manual": float(reorder_point), "AI Optimized": float(opt_r), "Goal": "Lower"},
+            {"Metric": "Reorder Point", "Manual": float(reorder_point), "AI Optimized": float(opt_r), "Goal": "N/A"},
             {"Metric": "Order Quantity", "Manual": float(order_qty), "AI Optimized": float(opt_q), "Goal": "N/A"},
             {"Metric": "Annual Total Cost (₹)", "Manual": m['avg_cost'], "AI Optimized": a['avg_cost'], "Goal": "Lower"},
             {"Metric": "Avg Fill Rate (%)", "Manual": m['avg_fr'], "AI Optimized": a['avg_fr'], "Goal": "Higher"},
             {"Metric": "Avg Stockout Days", "Manual": m['avg_so'], "AI Optimized": a['avg_so'], "Goal": "Lower"}
         ])
 
-        # 2. COLOR CODING LOGIC FOR TABLE
-        def color_cells(row):
+        # 2. SELECTIVE COLOR CODING (Only for results, not inputs)
+        def color_results_only(row):
             styles = [''] * len(row)
             manual, ai, goal = row['Manual'], row['AI Optimized'], row['Goal']
             
             if goal == "Lower":
-                color = "background-color: #2e7d32" if ai < manual else "background-color: #c62828"
+                color = "#2e7d32" if ai < manual else "#c62828"
+                styles[2] = f"background-color: {color}; color: white"
             elif goal == "Higher":
-                color = "background-color: #2e7d32" if ai > manual else "background-color: #c62828"
-            else:
-                color = ""
+                color = "#2e7d32" if ai > manual else "#c62828"
+                styles[2] = f"background-color: {color}; color: white"
             
-            if color:
-                styles[2] = f"{color}; color: white" # Only color the 'AI Optimized' column
             return styles
 
         st.write("### ⚖️ Policy Comparison")
         st.dataframe(
-            df_comp.style.apply(color_cells, axis=1).format({"Manual": "{:,.2f}", "AI Optimized": "{:,.2f}"}),
+            df_comp.style.apply(color_results_only, axis=1).format({"Manual": "{:,.2f}", "AI Optimized": "{:,.2f}"}),
             use_container_width=True,
             hide_index=True
         )
 
-        # 3. FIXED KPI COLORS
+        # 3. FIXED KPI COLOR LOGIC
         st.divider()
         st.write("### 💰 Strategic Financial Impact")
         k1, k2, k3 = st.columns(3)
         
         cost_saved = m['avg_cost'] - a['avg_cost']
         fr_gain = a['avg_fr'] - m['avg_fr']
-        so_reduced = m['avg_so'] - a['avg_so']
+        wc_delta = m['p99_wc'] - a['p99_wc']
 
-        # k1: Savings is Good (Positive = Green)
+        # k1: Savings (Positive is Green)
         k1.metric("Profit Impact", f"₹{abs(cost_saved):,.0f}", 
                   delta="Savings" if cost_saved >= 0 else "Loss", 
-                  delta_color="normal")
+                  delta_color="normal" if cost_saved >= 0 else "inverse")
         
-        # k2: Fill Rate Gain is Good (Positive = Green)
-        # We manually check the sign to ensure green/red is correct
+        # k2: Fill Rate Gain (Positive is Green, Decrease is Red)
         k2.metric("Service Level", f"{a['avg_fr']:.2f}%", 
                   delta=f"{fr_gain:+.2f}%", 
                   delta_color="normal" if fr_gain >= 0 else "inverse")
 
-        # k3: Stockout Days reduction is Good (Negative Delta = Green)
-        # Here we use 'inverse' because we want a +0.4 days (increase) to be RED
-        k3.metric("Reliability", f"{a['avg_so']:.1f} days", 
-                  delta=f"{+ (a['avg_so']-m['avg_so']):+.1f} days", 
-                  delta_color="inverse")
+        # k3: Working Capital (Reduction/Savings is Green)
+        k3.metric("Working Capital Delta", f"₹{abs(wc_delta):,.0f}", 
+                  delta="Cash Unlocked" if wc_delta >= 0 else "Extra Capital", 
+                  delta_color="normal" if wc_delta >= 0 else "inverse")
 
-        # 4. EXPORT FIX
+        # 4. EXPORT FIX (Include explicit index for scalar values)
         report_df = pd.DataFrame([m, a], index=["Manual Policy", "AI Policy"]).T
         st.download_button("📥 Download Summary Report", report_df.to_csv(), "inventory_report.csv")
 

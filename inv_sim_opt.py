@@ -682,7 +682,7 @@ with tab2:
 with tab3:
     st.header("🧬 Adaptive AI Optimizer")
     
-    # --- 1. SETTINGS & CONSTRAINTS ---
+    # --- 1. BUSINESS CONSTRAINTS ---
     st.subheader("Business Guardrails")
     col_c1, col_c2 = st.columns(2)
     with col_c1:
@@ -695,151 +695,151 @@ with tab3:
         if use_wc_constraint:
             max_wc_allowed = st.number_input("Maximum Cash Ceiling (₹)", value=100000, step=5000)
 
-    st.subheader("Optimizer Tuning")
-    num_pop = st.slider("Population Size (Genetic Diversity)", 20, 100, 40)
-    max_gen = st.slider("Max Generations (Safety Cap)", 20, 300, 100)
-    patience = st.number_input("Patience (Stable Generations before stopping)", value=10)
+    # --- 2. ADVANCED OPTIMIZER TUNING (Hidden Slider) ---
+    with st.expander("⚙️ Advanced Optimizer Tuning"):
+        st.info("Precision vs. Speed: Higher scenarios increase accuracy but slow down execution.")
+        n_opt_sim = st.select_slider(
+            "Simulation Scenarios (Precision)", 
+            options=[100, 500, 1000, 2000, 5000], 
+            value=1000
+        )
+        num_pop = st.slider("Population Size (Diversity)", 20, 100, 40)
+        max_gen = st.slider("Max Generations (Safety Cap)", 20, 300, 100)
+        patience = st.number_input("Patience (Stable Generations)", value=10)
 
-    # --- 2. OPTIMIZATION ENGINE ---
+    # --- 3. OPTIMIZATION ENGINE ---
     if st.button("🚀 Run Adaptive Optimization"):
         start_time = time.time()
         progress_bar = st.progress(0)
         status_text = st.empty()
         
-        # PRE-CALCULATE CONSTANTS (Vectorization Core)
+        # Pre-calculate Constants
         daily_h_unit = unit_value * holding_cost_rate / 365
-        # Use a fixed 1000 scenarios for a balance of speed and statistical power
-        n_opt_sim = 1000 
         demand_matrix = np.maximum(0, np.random.normal(avg_demand, std_demand, (n_opt_sim, num_days))).round()
         total_d_scenario = demand_matrix.sum(axis=1)
         
-        # Initialize Search Space
+        # Statistical Search Space
         avg_ltd = avg_demand * lead_time
         sigma_ltd = std_demand * np.sqrt(lead_time)
-        rop_f = int(max(0, avg_ltd - (2.0 * sigma_ltd)))
+        rop_f = int(max(0, avg_ltd - (2.5 * sigma_ltd)))
         rop_c = int(avg_ltd + (8.0 * sigma_ltd))
         
-        # Initial Population
+        # Initialize Population
         pop = [[random.randint(rop_f, rop_c), random.randint(100, int(avg_demand * 45))] for _ in range(num_pop)]
         
-        history = []
-        log_data = []
-        best_fitness_overall = float('inf')
-        gens_without_imp = 0
+        history, log_data = [], []
+        best_fitness_overall, gens_without_imp = float('inf'), 0
 
         for gen in range(max_gen):
-            fitness_scores = []
-            gen_metrics = [] 
+            fitness_scores, gen_metrics = [], []
             
             for r_t, q_t in pop:
-                # --- TURBO VECTORIZED SIMULATION ---
+                # --- TURBO VECTORIZED CORE SIMULATION ---
                 inv = np.full(n_opt_sim, opening_balance, dtype=float)
+                # Lead time buffer to prevent index errors in the arrivals matrix
                 arrivals = np.zeros((n_opt_sim, num_days + lead_time + 1))
                 pipeline_total = np.zeros(n_opt_sim)
+                
                 so, unmet, h_costs, orders, peaks = [np.zeros(n_opt_sim) for _ in range(5)]
 
                 for d in range(num_days):
+                    # 1. Update Inbound Stock
                     landing = arrivals[:, d]
                     inv += landing
                     pipeline_total -= landing
                     
+                    # 2. Subtract Demand
                     inv -= demand_matrix[:, d]
                     
-                    # Vectorized stockout and recovery
+                    # 3. Vectorized Stockout/Reset
                     out_mask = inv < 0
                     so += out_mask
                     unmet -= np.where(out_mask, inv, 0)
                     inv = np.where(out_mask, 0, inv)
                     
+                    # 4. Update Peaks & Costs
                     peaks = np.maximum(peaks, inv)
                     h_costs += (inv * daily_h_unit)
                     
+                    # 5. Inventory Position Reorder Logic
                     reorder_mask = (inv + pipeline_total <= r_t)
                     arrivals[reorder_mask, d + lead_time] = q_t 
                     pipeline_total += np.where(reorder_mask, q_t, 0)
                     orders += reorder_mask
 
-                # --- CALCULATE SCORES ---
+                # --- POST-SIMULATION ANALYSIS ---
                 fr_p1 = np.percentile((1 - (unmet / total_d_scenario)) * 100, 1)
                 so_p99 = np.percentile(so, 99)
                 wc_p99 = np.percentile(peaks, 99) * unit_value
-                avg_cost = (h_costs + (orders * ordering_cost)).mean()
+                avg_cost_val = (h_costs + (orders * ordering_cost)).mean()
                 
                 # Penalty Engine
                 penalty = 0
-                if use_so_constraint and so_p99 > target_so_days: penalty += (so_p99 - target_so_days) * 25000
-                if use_wc_constraint and wc_p99 > max_wc_allowed: penalty += (wc_p99 - max_wc_allowed) * 100
-                if fr_p1 < target_fr: penalty += (target_fr - fr_p1) * 35000
+                if use_so_constraint and so_p99 > target_so_days: penalty += (so_p99 - target_so_days) * 30000
+                if use_wc_constraint and wc_p99 > max_wc_allowed: penalty += (wc_p99 - max_wc_allowed) * 150
+                if fr_p1 < target_fr: penalty += (target_fr - fr_p1) * 45000
                 
-                score = avg_cost + penalty
-                fitness_scores.append(score)
-                gen_metrics.append({'cost': avg_cost, 'fr': fr_p1, 'so': so_p99, 'wc': wc_p99})
+                fitness_scores.append(avg_cost_val + penalty)
+                gen_metrics.append({'cost': avg_cost_val, 'fr': fr_p1, 'so': so_p99, 'wc': wc_p99})
 
-            # --- SELECTION & ADAPTIVE STOPPING ---
+            # Early Stopping Check
             best_idx = np.argmin(fitness_scores)
             curr_best_f = fitness_scores[best_idx]
-            best_m = gen_metrics[best_idx]
-            best_pol = pop[best_idx]
-
-            # Track improvement for Early Stopping
-            if curr_best_f < (best_fitness_overall - 5.0): # 5.0 is the improvement threshold
-                best_fitness_overall = curr_best_f
-                gens_without_imp = 0
+            if curr_best_f < (best_fitness_overall - 5.0):
+                best_fitness_overall, gens_without_imp = curr_best_f, 0
             else:
                 gens_without_imp += 1
             
+            # Logging
             history.append(curr_best_f)
             log_data.append({
-                "Gen": gen + 1,
-                "ROP": best_pol[0],
-                "Qty": best_pol[1],
-                "Cost": round(best_m['cost'], 0),
-                "FillRate": f"{best_m['fr']:.2f}%",
-                "SO Days": best_m['so']
+                "Gen": gen + 1, 
+                "ROP": pop[best_idx][0], 
+                "Qty": pop[best_idx][1], 
+                "Avg Cost": round(gen_metrics[best_idx]['cost'], 2),
+                "SO Days (P99)": gen_metrics[best_idx]['so']
             })
             
-            status_text.text(f"Gen {gen+1}: Stability {gens_without_imp}/{patience} | Best Cost ₹{round(best_m['cost'],0):,}")
+            status_text.text(f"Generation {gen+1}: Finding Optimal Balance... (Patience: {gens_without_imp}/{patience})")
             progress_bar.progress((gen + 1) / max_gen)
 
             if gens_without_imp >= patience:
-                status_text.success(f"✅ Optimization converged at Generation {gen+1}!")
+                status_text.success(f"✅ AI has converged on the most efficient policy at Gen {gen+1}!")
                 break
 
-            # Genetic Evolution
-            ranked_pop = [pop[i] for i in np.argsort(fitness_scores)]
-            new_pop = ranked_pop[:4] # Elitism
+            # Evolution Logic (Elitism + Mutation)
+            ranked_indices = np.argsort(fitness_scores)
+            ranked_pop = [pop[i] for i in ranked_indices]
+            new_pop = ranked_pop[:4] 
             while len(new_pop) < num_pop:
-                p1, p2 = random.sample(ranked_pop[:12], 2)
-                child = [int((p1[0]+p2[0])/2), int((p1[1]+p2[1])/2)]
+                parents = random.sample(ranked_pop[:12], 2)
+                child = [int((parents[0][0]+parents[1][0])/2), int((parents[0][1]+parents[1][1])/2)]
                 if random.random() < 0.3:
                     child[0] = np.clip(child[0] + random.randint(-25,25), rop_f, rop_c)
                 new_pop.append(child)
             pop = new_pop
 
-        # --- 3. RESULTS & VISUALS ---
-        st.session_state.best_policy = [best_pol[0], best_pol[1]]
+        # --- 4. FINAL KPI & VISUAL DASHBOARD ---
+        st.session_state.best_policy = [pop[0][0], pop[0][1]]
+        best_m = gen_metrics[best_idx]
         
         st.divider()
         k1, k2, k3 = st.columns(3)
-        fr_ok = best_m['fr'] >= target_fr
-        so_ok = not use_so_constraint or best_m['so'] <= target_so_days
+        fr_pass = best_m['fr'] >= target_fr
+        so_pass = not use_so_constraint or best_m['so'] <= target_so_days
 
-        k1.metric("Optimal ROP / Qty", f"{best_pol[0]} / {best_pol[1]}")
+        k1.metric("Optimal Strategy (ROP/Q)", f"{pop[0][0]} / {pop[0][1]}")
         k2.metric("Min Fill Rate (P1)", f"{best_m['fr']:.2f}%", 
-                  delta="PASS ✅" if fr_ok else "FAIL ❌", delta_color="normal" if fr_ok else "inverse")
+                  delta="PASS ✅" if fr_pass else "FAIL ❌", delta_color="normal" if fr_pass else "inverse")
         k3.metric("Stockout Risk (P99)", f"{best_m['so']:.1f} Days", 
-                  delta="PASS ✅" if so_ok else "FAIL ❌", delta_color="normal" if so_ok else "inverse")
+                  delta="PASS ✅" if so_pass else "FAIL ❌", delta_color="normal" if so_pass else "inverse")
 
-        # Visuals
-        st.subheader("📈 Optimization Insights")
-        c_plot1, c_plot2 = st.columns([2, 1])
-        
-        with c_plot1:
-            st.plotly_chart(px.line(y=history, title="Learning Curve: Fitness Improvement", labels={'y':'Penalty-Adjusted Cost', 'index':'Generation'}), use_container_width=True)
-        
-        with c_plot2:
-            st.write("### 📜 Simulation Log")
-            st.dataframe(pd.DataFrame(log_data).tail(10), hide_index=True)
+        # Visualization Tabs
+        v_tab1, v_tab2 = st.tabs(["📉 Learning Curve", "📜 Simulation Log"])
+        with v_tab1:
+            st.plotly_chart(px.line(y=history, title="AI Optimization Progress", labels={'y':'Fitness (Lower is Better)', 'index':'Generation'}), use_container_width=True)
+        with v_tab2:
+            st.dataframe(pd.DataFrame(log_data), use_container_width=True, hide_index=True)
 # with tab3:
 #     st.header("🧬 AI Inventory Optimizer")
     

@@ -983,7 +983,9 @@ with tab4:
                         total_unmet[out_mask] -= inv[out_mask]
                         inv[out_mask] = 0
                     
+                    # Track Peak Inventory for WC calculation
                     scenario_peaks = np.maximum(scenario_peaks, inv)
+                    
                     inv_pos = inv + pipeline_total
                     reorder_mask = (inv_pos <= r)
                     if np.any(reorder_mask):
@@ -1008,24 +1010,24 @@ with tab4:
     if st.session_state.get('stress_test_done'):
         m, a = st.session_state.m_res, st.session_state.a_res
         
-        # 1. TABLE DATA
+        # 1. TABLE DATA (Added Working Capital)
         df_comp = pd.DataFrame([
             {"Metric": "Reorder Point", "Manual": float(reorder_point), "AI Optimized": float(opt_r), "Goal": "N/A"},
             {"Metric": "Order Quantity", "Manual": float(order_qty), "AI Optimized": float(opt_q), "Goal": "N/A"},
             {"Metric": "Annual Total Cost (₹)", "Manual": m['avg_cost'], "AI Optimized": a['avg_cost'], "Goal": "Lower"},
+            {"Metric": "Peak Working Capital (₹)", "Manual": m['p99_wc'], "AI Optimized": a['p99_wc'], "Goal": "Lower"},
             {"Metric": "Avg Fill Rate (%)", "Manual": m['avg_fr'], "AI Optimized": a['avg_fr'], "Goal": "Higher"},
             {"Metric": "Avg Stockout Days", "Manual": m['avg_so'], "AI Optimized": a['avg_so'], "Goal": "Lower"}
         ])
 
-        # 2. SELECTIVE COLOR CODING (Skip ROP/Qty)
         def color_logic(row):
             styles = [''] * len(row)
             man, opt, goal = row['Manual'], row['AI Optimized'], row['Goal']
             if goal == "Lower":
-                color = "#2e7d32" if opt < man else "#c62828"
+                color = "#2e7d32" if opt <= man else "#c62828"
                 styles[2] = f"background-color: {color}; color: white"
             elif goal == "Higher":
-                color = "#2e7d32" if opt > man else "#c62828"
+                color = "#2e7d32" if opt >= man else "#c62828"
                 styles[2] = f"background-color: {color}; color: white"
             return styles
 
@@ -1035,27 +1037,29 @@ with tab4:
             use_container_width=True, hide_index=True
         )
 
-        # 3. KPI LOGIC (Correcting the Service Level Color)
+        # 2. KPI LOGIC (Strict Red/Green Logic)
         st.divider()
         st.write("### 💰 Strategic Financial Impact")
         k1, k2, k3 = st.columns(3)
         
         cost_saved = m['avg_cost'] - a['avg_cost']
+        wc_impact = a['p99_wc'] - m['p99_wc'] # Positive = Bad (Needs more capital)
         fr_gain = a['avg_fr'] - m['avg_fr']
-        wc_delta = m['p99_wc'] - a['p99_wc']
 
+        # Profit: Savings is Good
         k1.metric("Profit Impact", f"₹{abs(cost_saved):,.0f}", 
                   delta="Savings" if cost_saved >= 0 else "Loss", 
                   delta_color="normal")
         
-        # Manually force RED if gain is negative
-        k2.metric("Service Level", f"{a['avg_fr']:.2f}%", 
+        # Service Level: Increase is Good, Decrease is RED
+        k2.metric("Service Level Change", f"{a['avg_fr']:.2f}%", 
                   delta=f"{fr_gain:+.2f}%", 
                   delta_color="normal" if fr_gain >= 0 else "inverse")
 
-        k3.metric("Working Capital Delta", f"₹{abs(wc_delta):,.0f}", 
-                  delta="Cash Unlocked" if wc_delta >= 0 else "Extra Capital", 
-                  delta_color="normal" if wc_delta >= 0 else "inverse")
+        # Working Capital: Increase is RED, Reduction is GREEN
+        k3.metric("Working Capital Change", f"₹{abs(wc_impact):,.0f}", 
+                  delta="Extra Capital" if wc_impact > 0 else "Cash Unlocked", 
+                  delta_color="inverse")
 
 # with tab5:
 #     st.header("📋 Executive Summary & Action Plan")

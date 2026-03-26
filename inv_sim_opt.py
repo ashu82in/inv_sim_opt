@@ -1000,29 +1000,39 @@ with tab4:
     if st.session_state.get('stress_test_done'):
         m, a = st.session_state.m_res, st.session_state.a_res
         
-        # 1. Create a clean comparison dataframe
-        # Added 'Status' column to drive the color icons
-        data = [
-            {"Metric": "Annual Total Cost (₹)", "Manual": m['avg_cost'], "AI Optimized": a['avg_cost'], "Better": a['avg_cost'] < m['avg_cost']},
-            {"Metric": "Avg Fill Rate (%)", "Manual": m['avg_fr'], "AI Optimized": a['avg_fr'], "Better": a['avg_fr'] > m['avg_fr']},
-            {"Metric": "Avg Stockout Days", "Manual": m['avg_so'], "AI Optimized": a['avg_so'], "Better": a['avg_so'] < m['avg_so']}
-        ]
-        df_display = pd.DataFrame(data)
+        # 1. CREATE DATAFRAME WITH ALL ROWS
+        df_comp = pd.DataFrame([
+            {"Metric": "Reorder Point", "Manual": float(reorder_point), "AI Optimized": float(opt_r), "Goal": "Lower"},
+            {"Metric": "Order Quantity", "Manual": float(order_qty), "AI Optimized": float(opt_q), "Goal": "N/A"},
+            {"Metric": "Annual Total Cost (₹)", "Manual": m['avg_cost'], "AI Optimized": a['avg_cost'], "Goal": "Lower"},
+            {"Metric": "Avg Fill Rate (%)", "Manual": m['avg_fr'], "AI Optimized": a['avg_fr'], "Goal": "Higher"},
+            {"Metric": "Avg Stockout Days", "Manual": m['avg_so'], "AI Optimized": a['avg_so'], "Goal": "Lower"}
+        ])
 
-        # 2. Policy Comparison Table with Conditional Formatting (Column Config)
+        # 2. COLOR CODING LOGIC FOR TABLE
+        def color_cells(row):
+            styles = [''] * len(row)
+            manual, ai, goal = row['Manual'], row['AI Optimized'], row['Goal']
+            
+            if goal == "Lower":
+                color = "background-color: #2e7d32" if ai < manual else "background-color: #c62828"
+            elif goal == "Higher":
+                color = "background-color: #2e7d32" if ai > manual else "background-color: #c62828"
+            else:
+                color = ""
+            
+            if color:
+                styles[2] = f"{color}; color: white" # Only color the 'AI Optimized' column
+            return styles
+
         st.write("### ⚖️ Policy Comparison")
         st.dataframe(
-            df_display,
-            column_config={
-                "Better": st.column_config.CheckboxColumn("Efficiency Gain?", help="Check indicates AI performed better"),
-                "Manual": st.column_config.NumberColumn(format="₹ %.2f"),
-                "AI Optimized": st.column_config.NumberColumn(format="₹ %.2f"),
-            },
-            hide_index=True,
-            use_container_width=True
+            df_comp.style.apply(color_cells, axis=1).format({"Manual": "{:,.2f}", "AI Optimized": "{:,.2f}"}),
+            use_container_width=True,
+            hide_index=True
         )
 
-        # 3. FIXED KPIs: Using delta_color to show red/green
+        # 3. FIXED KPI COLORS
         st.divider()
         st.write("### 💰 Strategic Financial Impact")
         k1, k2, k3 = st.columns(3)
@@ -1031,20 +1041,24 @@ with tab4:
         fr_gain = a['avg_fr'] - m['avg_fr']
         so_reduced = m['avg_so'] - a['avg_so']
 
+        # k1: Savings is Good (Positive = Green)
         k1.metric("Profit Impact", f"₹{abs(cost_saved):,.0f}", 
                   delta="Savings" if cost_saved >= 0 else "Loss", 
-                  delta_color="normal" if cost_saved >= 0 else "inverse")
+                  delta_color="normal")
         
+        # k2: Fill Rate Gain is Good (Positive = Green)
+        # We manually check the sign to ensure green/red is correct
         k2.metric("Service Level", f"{a['avg_fr']:.2f}%", 
                   delta=f"{fr_gain:+.2f}%", 
                   delta_color="normal" if fr_gain >= 0 else "inverse")
 
+        # k3: Stockout Days reduction is Good (Negative Delta = Green)
+        # Here we use 'inverse' because we want a +0.4 days (increase) to be RED
         k3.metric("Reliability", f"{a['avg_so']:.1f} days", 
-                  delta=f"{-so_reduced:+.1f} days", 
-                  delta_color="normal" if so_reduced >= 0 else "inverse")
+                  delta=f"{+ (a['avg_so']-m['avg_so']):+.1f} days", 
+                  delta_color="inverse")
 
-        # 4. FIXED EXPORT (The solution to your ValueError)
-        # We pass an explicit index to prevent the "scalar values" error
+        # 4. EXPORT FIX
         report_df = pd.DataFrame([m, a], index=["Manual Policy", "AI Policy"]).T
         st.download_button("📥 Download Summary Report", report_df.to_csv(), "inventory_report.csv")
 

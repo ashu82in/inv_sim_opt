@@ -336,136 +336,115 @@ with tab2:
 
 with tab3:
     st.header("🧬 AI Inventory Optimizer")
-    st.write("Finds the lowest-cost ROP and Order Quantity (Q) that satisfies your service targets.")
-
-    # --- 1. SET TARGETS & INPUTS ---
+    
+    # --- 1. TARGETS & SEARCH SPACE ---
     c_input1, c_input2 = st.columns(2)
     with c_input1:
-        # These are the variables that caused the NameError; defining them here fixes it.
-        target_fr = st.slider("Target Annual Fill Rate (%)", 85.0, 100.0, 95.0, help="Percentage of total demand units fulfilled from stock.")
-        target_so_days = st.number_input("Max Allowed Stockout Days", value=2, help="The 99% 'Worst Case' limit for days out of stock per year.")
+        target_fr = st.slider("Target Annual Fill Rate (%)", 85.0, 100.0, 95.0)
+        target_so_days = st.number_input("Max Allowed Stockout Days", value=2)
     
     with c_input2:
-        num_pop = 20  # Population of policies to test
-        num_gen = 8   # Generations of evolution
-        num_sim = 2000 # Scenarios per test (Vectorized makes this fast!)
+        num_pop = 20  
+        num_gen = 10   
+        num_sim = 2000 
 
-    # --- 2. CALCULATE STATISTICAL BOUNDS ---
-    import scipy.stats as stats
-    # Setting a 'Lean' Floor at Avg Lead Time Demand to avoid overstocking
+    # Statistical Bounds
     avg_ltd = avg_demand * lead_time
     sigma_ltd = std_demand * np.sqrt(lead_time)
-    
-    rop_floor = int(max(0, avg_ltd)) 
-    rop_ceil = int(avg_ltd + (5.5 * sigma_ltd)) # 5.5 Sigma Ceiling for extreme safety
+    rop_floor, rop_ceil = int(max(0, avg_ltd)), int(avg_ltd + (5.5 * sigma_ltd))
 
-    st.caption(f"Search Range: ROP between **{rop_floor}** and **{rop_ceil}** units.")
-
-    # --- 3. OPTIMIZATION ENGINE ---
+    # --- 2. LIVE TRACKING PLACEHOLDERS ---
     if st.button("🚀 Run Vectorized Optimization"):
         start_time = time.time()
         
-        # Pre-generate Demand Matrix (Scenarios x Days)
-        # This is the secret to speed: Generate once, use many times.
+        # Placeholders for live updates
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        table_placeholder = st.empty() # This will show the stepwise progress
+        
+        # Pre-generate Demand Matrix
         demand_matrix = np.maximum(0, np.random.normal(avg_demand, std_demand, (num_sim, num_days))).round()
         
-        # Initialize Population [ROP, Q]
+        # Initialize Population
         bounds = [(rop_floor, rop_ceil), (100, int(avg_demand * 45))]
         pop = [[np.random.randint(b[0], b[1]) for b in bounds] for _ in range(num_pop)]
         
-        progress_bar = st.progress(0)
-        status_box = st.empty()
+        stepwise_data = [] # To store the best of each generation
         history = []
 
         for gen in range(num_gen):
             fitness_scores = []
             
-            # VECTORIZED EVALUATION OF POPULATION
             for r_t, q_t in pop:
-                # Initialize simulation arrays
+                # Vectorized Simulation
                 inventory = np.full(num_sim, opening_balance, dtype=float)
                 arrival_days = np.full(num_sim, -1)
-                so_days = np.zeros(num_sim)
-                total_unmet = np.zeros(num_sim)
-                h_costs = np.zeros(num_sim)
-                orders = np.zeros(num_sim)
+                so_days, total_unmet, h_costs, orders = np.zeros(num_sim), np.zeros(num_sim), np.zeros(num_sim), np.zeros(num_sim)
 
-                # Daily Loop (Vectorized across all scenarios)
                 for d in range(num_days):
-                    # Arrivals
                     arrived = (arrival_days == d)
                     inventory[arrived] += q_t
                     arrival_days[arrived] = -1
                     
-                    # Demand & Shortfall
                     d_today = demand_matrix[:, d]
                     shortfall = np.maximum(0, d_today - inventory)
                     so_days[shortfall > 0] += 1
                     total_unmet += shortfall
-                    
                     inventory = np.maximum(0, inventory - d_today)
                     h_costs += (inventory * (unit_value * holding_cost_rate / 365))
                     
-                    # Reordering
                     reorder_mask = (inventory <= r_t) & (arrival_days == -1)
                     arrival_days[reorder_mask] = d + lead_time
                     orders[reorder_mask] += 1
 
-                # Calculate KPIs
-                total_demand_per_scenario = demand_matrix.sum(axis=1)
-                fill_rates = (1 - (total_unmet / total_demand_per_scenario)) * 100
+                fill_rates = (1 - (total_unmet / demand_matrix.sum(axis=1))) * 100
                 scenario_costs = h_costs + (orders * ordering_cost)
                 
-                # Percentile Risk Checks
-                p99_so = np.percentile(so_days, 99)
-                p1_fr = np.percentile(fill_rates, 1)
-                avg_cost = np.mean(scenario_costs)
+                # Metrics for Fitness
+                p99_so, p1_fr, avg_cost = np.percentile(so_days, 99), np.percentile(fill_rates, 1), np.mean(scenario_costs)
 
-                # Fitness: Cost + Massive Penalty for failing constraints
                 if p99_so <= target_so_days and p1_fr >= target_fr:
                     score = avg_cost
                 else:
-                    # Penalty scales with how far off they are
-                    penalty = 1 + (p99_so - target_so_days) + (target_fr - p1_fr)
-                    score = avg_cost * 1000 * penalty
+                    score = avg_cost * 1000 * (1 + (p99_so - target_so_days) + (target_fr - p1_fr))
                 
                 fitness_scores.append(score)
 
-            # --- EVOLUTION ---
+            # --- RECORD STEPWISE PROGRESS ---
             ranked = [x for _, x in sorted(zip(fitness_scores, pop))]
             best_score = min(fitness_scores)
+            is_feasible = "✅ Yes" if best_score < 1e7 else "❌ No"
             
-            # Only record history if we found a feasible solution
+            # Save the best policy of this generation to the log
+            stepwise_data.append({
+                "Gen": gen + 1,
+                "Best ROP": ranked[0][0],
+                "Best Qty": ranked[0][1],
+                "Annual Cost": f"₹{round(best_score, 0)}" if best_score < 1e7 else "Penalized",
+                "Feasible?": is_feasible
+            })
+            
+            # UPDATE LIVE TABLE
+            import pandas as pd
+            table_placeholder.table(pd.DataFrame(stepwise_data).set_index("Gen"))
+            
             history.append(best_score if best_score < 1e7 else None)
             
-            # Elitism + Crossover
+            # Evolution Step
             new_pop = ranked[:2]
             while len(new_pop) < num_pop:
                 p1, p2 = random.sample(ranked[:8], 2)
                 child = [int((p1[0]+p2[0])/2), int((p1[1]+p2[1])/2)]
-                if np.random.random() < 0.2: # Mutation
+                if np.random.random() < 0.2:
                     child[0] = np.clip(child[0] + np.random.randint(-30, 30), rop_floor, rop_ceil)
                 new_pop.append(child)
             pop = new_pop
             
             progress_bar.progress((gen + 1) / num_gen)
-            status_box.write(f"🧬 **Generation {gen+1}**: " + 
-                             (f"Best Cost ₹{round(best_score,0)}" if best_score < 1e7 else "Searching for safe zone..."))
+            status_text.text(f"Processing Generation {gen+1} of {num_gen}...")
 
-        # --- FINAL RESULTS ---
-        best_r, best_q = ranked[0]
-        st.divider()
-        st.success(f"Optimization Complete in {round(time.time()-start_time, 2)}s")
-        
-        res1, res2, res3 = st.columns(3)
-        res1.metric("Recommended ROP", best_r)
-        res2.metric("Recommended Qty", best_q)
-        res3.metric("Annualized Cost", f"₹{round(best_score if best_score < 1e7 else 0, 0)}")
-
-        # Convergence Plot
+        # --- FINAL DISPLAY ---
+        st.success(f"Optimization finished in {round(time.time()-start_time, 2)}s")
         plot_history = [h for h in history if h is not None]
         if plot_history:
-            st.plotly_chart(px.line(y=plot_history, title="Minima Convergence (Cost Optimization Path)", 
-                                   labels={'y':'Annual Cost ₹','x':'Generation'}, markers=True))
-        else:
-            st.error("⚠️ No feasible policy found. Try increasing 'Max Stockout Days' or lowering 'Fill Rate %'.")
+            st.plotly_chart(px.line(y=plot_history, title="Minima Convergence Plot", labels={'y':'Cost ₹','x':'Gen'}, markers=True))

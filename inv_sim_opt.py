@@ -653,20 +653,16 @@ with tab3:
         if history:
             st.plotly_chart(px.line(y=history, title="Minima Convergence Plot (Fitness Score)", markers=True))
 
-import streamlit as st
-import numpy as np
-import pandas as pd
-import time
-import plotly.express as px
+
 
 with tab4:
     st.header("🛡️ Strategy Validation & Impact")
-    st.write("Compare your **Manual Policy** against the **AI Optimized Policy** under extreme 10,000-scenario stress.")
+    st.write("Compare your **Manual Policy** against the **AI Optimized Policy** under 10,000 extreme scenarios.")
 
-    # 1. ACCESS OPTIMIZED DATA
+    # 1. RETRIEVE OPTIMIZED VALUES
     if 'best_policy' not in st.session_state or st.session_state.best_policy is None:
         st.warning("⚠️ No Optimized Policy found. Please run the Optimizer in Tab 3 first.")
-        opt_r, opt_q = 0, 0 # Fallback
+        opt_r, opt_q = 0, 0
     else:
         opt_r, opt_q = st.session_state.best_policy
 
@@ -679,7 +675,8 @@ with tab4:
             def run_stress_sim(r, q):
                 inv = np.full(n_stress, opening_balance, dtype=float)
                 arr = np.full(n_stress, -1)
-                so, unmet, h_cost, orders, daily_inv_sum = [np.zeros(n_stress) for _ in range(5)]
+                so, unmet, h_cost, orders = [np.zeros(n_stress) for _ in range(4)]
+                scenario_peaks = np.zeros(n_stress)
                 
                 for d in range(num_days):
                     mask_arr = (arr == d)
@@ -693,7 +690,9 @@ with tab4:
                     
                     inv = np.maximum(0, inv - d_t)
                     h_cost += (inv * (unit_value * holding_cost_rate / 365))
-                    daily_inv_sum += inv
+                    
+                    # Track Peak Working Capital per scenario
+                    scenario_peaks = np.maximum(scenario_peaks, inv)
                     
                     mask_re = (inv <= r) & (arr == -1)
                     arr[mask_re] = d + lead_time
@@ -701,82 +700,78 @@ with tab4:
                 
                 fr = (1 - (unmet / stress_demands.sum(axis=1))) * 100
                 total_c = h_cost + (orders * ordering_cost)
-                avg_wc = (daily_inv_sum / num_days) * unit_value
                 
                 return {
                     "fr_raw": fr,
                     "avg_fr": fr.mean(),
                     "avg_so": so.mean(),
                     "avg_cost": total_c.mean(),
-                    "avg_wc": avg_wc.mean(),
+                    "p99_wc": np.percentile(scenario_peaks, 99) * unit_value,
                     "p99_so": np.percentile(so, 99)
                 }
 
-            manual_res = run_stress_sim(reorder_point, order_qty)
-            ai_res = run_stress_sim(opt_r, opt_q)
+            m_res = run_stress_sim(reorder_point, order_qty)
+            a_res = run_stress_sim(opt_r, opt_q)
             status.update(label="✅ Stress Test Complete!", state="complete")
 
-        # 3. SIDE-BY-SIDE COMPARISON TABLE
+        # 3. CONDITIONAL FORMATTING TABLE
         st.write("### ⚖️ Policy Comparison")
-        comp_df = pd.DataFrame({
-            "Metric": [
-                "Reorder Point (ROP)", 
-                "Order Quantity (Q)", 
-                "Avg Fill Rate (%)", 
-                "Avg Stockout Days", 
-                "Avg Working Capital Blocked (₹)", 
-                "Annual Total Cost (₹)", 
-                "Worst Case (P99) Stockouts"
-            ],
-            "Manual Policy": [
-                reorder_point, 
-                order_qty, 
-                f"{manual_res['avg_fr']:.2f}%", 
-                f"{manual_res['avg_so']:.1f}", 
-                f"₹{manual_res['avg_wc']:,.0f}", 
-                f"₹{manual_res['avg_cost']:,.0f}", 
-                f"{manual_res['p99_so']:.0f} days"
-            ],
-            "AI Optimized": [
-                opt_r, 
-                opt_q, 
-                f"{ai_res['avg_fr']:.2f}%", 
-                f"{ai_res['avg_so']:.1f}", 
-                f"₹{ai_res['avg_wc']:,.0f}", 
-                f"₹{ai_res['avg_cost']:,.0f}", 
-                f"{ai_res['p99_so']:.0f} days"
-            ]
-        })
-        st.table(comp_df)
+        
+        comparison_data = [
+            {"Metric": "Avg Fill Rate (%)", "Manual": m_res['avg_fr'], "AI Optimized": a_res['avg_fr'], "LowerIsBetter": False},
+            {"Metric": "Avg Stockout Days", "Manual": m_res['avg_so'], "AI Optimized": a_res['avg_so'], "LowerIsBetter": True},
+            {"Metric": "Peak Working Capital (P99 ₹)", "Manual": m_res['p99_wc'], "AI Optimized": a_res['p99_wc'], "LowerIsBetter": True},
+            {"Metric": "Annual Total Cost (₹)", "Manual": m_res['avg_cost'], "AI Optimized": a_res['avg_cost'], "LowerIsBetter": True},
+            {"Metric": "Worst Case (P99) Stockouts", "Manual": m_res['p99_so'], "AI Optimized": a_res['p99_so'], "LowerIsBetter": True}
+        ]
+        
+        df_comp = pd.DataFrame(comparison_data)
 
-        # 4. CASH & SAVINGS METRICS
+        def style_cells(row):
+            m, a = row['Manual'], row['AI Optimized']
+            better = (a <= m) if row['LowerIsBetter'] else (a >= m)
+            color = "background-color: #2e7d32; color: white" if better else "background-color: #c62828; color: white"
+            return ['', '', color, '']
+
+        styled_df = df_comp.style.apply(style_cells, axis=1).format({
+            "Manual": "{:,.2f}", 
+            "AI Optimized": "{:,.2f}"
+        }).hide(axis="columns", subset=["LowerIsBetter"])
+        
+        st.write(styled_df)
+
+        # 4. KPI FINANCIAL IMPACT
         st.divider()
-        st.write("### 💰 Financial Impact Summary")
-        m1, m2, m3 = st.columns(3)
+        st.write("### 💰 Strategic Financial Impact")
+        k1, k2, k3 = st.columns(3)
         
-        annual_savings = manual_res['avg_cost'] - ai_res['avg_cost']
-        wc_delta = manual_res['avg_wc'] - ai_res['avg_wc']
-        
-        m1.metric("Annual Cost Savings", f"₹{round(annual_savings, 0):,}", 
-                  delta=f"{round((annual_savings/manual_res['avg_cost'])*100, 1)}%")
-        
-        m2.metric("Working Capital Redxn.", f"₹{round(wc_delta, 0):,}", 
-                  delta="Cash Unlocked", delta_color="normal")
-        
-        # 'Day 1 Unlock' is a conceptual metric of immediate liquidity improvement
-        m3.metric("Liquidity Buffer", f"{round((wc_delta/unit_value), 0)} Units", 
-                  help="The equivalent number of units you no longer need to keep 'trapped' in stock.")
+        savings = m_res['avg_cost'] - a_res['avg_cost']
+        wc_delta = m_res['p99_wc'] - a_res['p99_wc'] # Positive = Savings, Negative = Investment
+        fr_delta = a_res['avg_fr'] - m_res['avg_fr']
 
-        # 5. FOUNDER'S STRATEGY NOTE
-        if wc_delta > 0:
-            st.success(f"🚀 **Liquidity Win:** You can 'unlock' **₹{round(wc_delta, 0):,}** in cash currently tied up in excess stock while keeping service levels at {target_fr}%.")
+        k1.metric("Annual Cost Savings", f"₹{round(abs(savings), 0):,}", 
+                  delta=f"{round((savings/m_res['avg_cost'])*100, 1)}%" if savings !=0 else "0%",
+                  delta_color="normal" if savings >= 0 else "inverse")
         
-        # 6. STABILITY BOX PLOT
+        k2.metric("Working Capital Delta", f"₹{round(abs(wc_delta), 0):,}", 
+                  delta="Cash Unlocked" if wc_delta >= 0 else "Capital Investment",
+                  delta_color="normal" if wc_delta >= 0 else "inverse")
+        
+        k3.metric("Service Level Gain", f"{round(fr_delta, 2)}%", 
+                  delta="Higher Reliability" if fr_delta >= 0 else "Lower Reliability",
+                  delta_color="normal" if fr_delta >= 0 else "inverse")
+
+        # 5. FOUNDER'S SUMMARY
+        if wc_delta < 0:
+            st.info(f"💡 **Strategic Pivot:** To hit your {target_fr}% target, the AI recommends an investment of **₹{round(abs(wc_delta), 0):,}** in stock. This fixes the {round(m_res['avg_so'],1)} day stockout issue.")
+        else:
+            st.success(f"🚀 **Efficiency Win:** The AI found a way to unlock **₹{round(wc_delta, 0):,}** in cash while improving your reliability.")
+
+        # 6. RELIABILITY PLOT
         st.plotly_chart(px.box(pd.DataFrame({
-            "Manual": manual_res['fr_raw'], 
-            "AI Optimized": ai_res['fr_raw']
+            "Manual": m_res['fr_raw'], 
+            "AI Optimized": a_res['fr_raw']
         }).melt(), x="variable", y="value", color="variable",
-        title="Reliability Consistency (Fill Rate % Spread)",
+        title="Reliability Spread (Fill Rate %)",
+        labels={'value': 'Fill Rate %', 'variable': 'Strategy'},
         color_discrete_map={"Manual": "#EF553B", "AI Optimized": "#00CC96"}), use_container_width=True)
-
-

@@ -654,12 +654,11 @@ with tab3:
             st.plotly_chart(px.line(y=history, title="Minima Convergence Plot (Fitness Score)", markers=True))
 
 
-
 with tab4:
     st.header("🛡️ Strategy Validation & Impact")
     st.write("Compare your **Manual Policy** against the **AI Optimized Policy** under 10,000 extreme scenarios.")
 
-    # 1. RETRIEVE OPTIMIZED VALUES
+    # 1. RETRIEVE OPTIMIZED VALUES FROM SESSION STATE
     if 'best_policy' not in st.session_state or st.session_state.best_policy is None:
         st.warning("⚠️ No Optimized Policy found. Please run the Optimizer in Tab 3 first.")
         opt_r, opt_q = 0, 0
@@ -714,33 +713,44 @@ with tab4:
             a_res = run_stress_sim(opt_r, opt_q)
             status.update(label="✅ Stress Test Complete!", state="complete")
 
-        # 3. CONDITIONAL FORMATTING TABLE
-        st.write("### ⚖️ Policy Comparison")
+        # 3. COMPARISON TABLE WITH DECISION VARIABLES
+        st.write("### ⚖️ Policy & Performance Comparison")
         
         comparison_data = [
-            {"Metric": "Avg Fill Rate (%)", "Manual": m_res['avg_fr'], "AI Optimized": a_res['avg_fr'], "LowerIsBetter": False},
-            {"Metric": "Avg Stockout Days", "Manual": m_res['avg_so'], "AI Optimized": a_res['avg_so'], "LowerIsBetter": True},
-            {"Metric": "Peak Working Capital (P99 ₹)", "Manual": m_res['p99_wc'], "AI Optimized": a_res['p99_wc'], "LowerIsBetter": True},
-            {"Metric": "Annual Total Cost (₹)", "Manual": m_res['avg_cost'], "AI Optimized": a_res['avg_cost'], "LowerIsBetter": True},
-            {"Metric": "Worst Case (P99) Stockouts", "Manual": m_res['p99_so'], "AI Optimized": a_res['p99_so'], "LowerIsBetter": True}
+            {"Metric": "Reorder Point (ROP)", "Manual": float(reorder_point), "AI Optimized": float(opt_r), "Type": "Decision", "LowerIsBetter": None},
+            {"Metric": "Order Quantity (Qty)", "Manual": float(order_qty), "AI Optimized": float(opt_q), "Type": "Decision", "LowerIsBetter": None},
+            {"Metric": "Avg Fill Rate (%)", "Manual": m_res['avg_fr'], "AI Optimized": a_res['avg_fr'], "Type": "Metric", "LowerIsBetter": False},
+            {"Metric": "Avg Stockout Days", "Manual": m_res['avg_so'], "AI Optimized": a_res['avg_so'], "Type": "Metric", "LowerIsBetter": True},
+            {"Metric": "Peak Working Capital (P99 ₹)", "Manual": m_res['p99_wc'], "AI Optimized": a_res['p99_wc'], "Type": "Metric", "LowerIsBetter": True},
+            {"Metric": "Annual Total Cost (₹)", "Manual": m_res['avg_cost'], "AI Optimized": a_res['avg_cost'], "Type": "Metric", "LowerIsBetter": True},
+            {"Metric": "Worst Case (P99) Stockouts", "Manual": m_res['p99_so'], "AI Optimized": a_res['p99_so'], "Type": "Metric", "LowerIsBetter": True}
         ]
         
         df_comp = pd.DataFrame(comparison_data)
 
-        def style_cells(row):
+        def style_comparison(row):
+            # No color for Decision Variables
+            if row['Type'] == "Decision":
+                return ['', '', '', '', '']
+            
+            # Color logic for Metrics only
             m, a = row['Manual'], row['AI Optimized']
             better = (a <= m) if row['LowerIsBetter'] else (a >= m)
-            color = "background-color: #2e7d32; color: white" if better else "background-color: #c62828; color: white"
-            return ['', '', color, '']
+            color = "background-color: #2e7d32; color: white; font-weight: bold" if better else "background-color: #c62828; color: white; font-weight: bold"
+            return ['', '', color, '', '']
 
-        styled_df = df_comp.style.apply(style_cells, axis=1).format({
+        styled_df = df_comp.style.apply(style_comparison, axis=1).format({
             "Manual": "{:,.2f}", 
             "AI Optimized": "{:,.2f}"
-        }).hide(axis="columns", subset=["LowerIsBetter"])
+        }).hide(axis="columns", subset=["Type", "LowerIsBetter"])
         
         st.write(styled_df)
 
-        # 4. KPI FINANCIAL IMPACT
+        # 4. DOWNLOAD DATA
+        csv = df_comp.to_csv(index=False).encode('utf-8')
+        st.download_button("📥 Download Comparison Report", data=csv, file_name="inventory_optimization_report.csv", mime="text/csv")
+
+        # 5. STRATEGIC FINANCIAL IMPACT
         st.divider()
         st.write("### 💰 Strategic Financial Impact")
         k1, k2, k3 = st.columns(3)
@@ -750,7 +760,7 @@ with tab4:
         fr_delta = a_res['avg_fr'] - m_res['avg_fr']
 
         k1.metric("Annual Cost Savings", f"₹{round(abs(savings), 0):,}", 
-                  delta=f"{round((savings/m_res['avg_cost'])*100, 1)}%" if savings !=0 else "0%",
+                  delta=f"{round((savings/m_res['avg_cost'])*100, 1) if m_res['avg_cost'] !=0 else 0}%",
                   delta_color="normal" if savings >= 0 else "inverse")
         
         k2.metric("Working Capital Delta", f"₹{round(abs(wc_delta), 0):,}", 
@@ -761,17 +771,17 @@ with tab4:
                   delta="Higher Reliability" if fr_delta >= 0 else "Lower Reliability",
                   delta_color="normal" if fr_delta >= 0 else "inverse")
 
-        # 5. FOUNDER'S SUMMARY
+        # 6. FOUNDER'S SUMMARY
+        st.info("💡 **Founder's Insight:**")
         if wc_delta < 0:
-            st.info(f"💡 **Strategic Pivot:** To hit your {target_fr}% target, the AI recommends an investment of **₹{round(abs(wc_delta), 0):,}** in stock. This fixes the {round(m_res['avg_so'],1)} day stockout issue.")
+            st.warning(f"Investing **₹{round(abs(wc_delta), 0):,}** in stock now prevents **{round(m_res['p99_so'],0)}** days of lost sales in the future.")
         else:
-            st.success(f"🚀 **Efficiency Win:** The AI found a way to unlock **₹{round(wc_delta, 0):,}** in cash while improving your reliability.")
+            st.success(f"Optimizing order frequency has released **₹{round(wc_delta, 0):,}** in liquid cash back to your bank account.")
 
-        # 6. RELIABILITY PLOT
+        # 7. VISUAL RELIABILITY BOXPLOT
         st.plotly_chart(px.box(pd.DataFrame({
             "Manual": m_res['fr_raw'], 
             "AI Optimized": a_res['fr_raw']
         }).melt(), x="variable", y="value", color="variable",
         title="Reliability Spread (Fill Rate %)",
-        labels={'value': 'Fill Rate %', 'variable': 'Strategy'},
         color_discrete_map={"Manual": "#EF553B", "AI Optimized": "#00CC96"}), use_container_width=True)

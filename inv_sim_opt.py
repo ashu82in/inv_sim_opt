@@ -701,12 +701,13 @@ with tab3:
     with st.expander("⚙️ Optimizer Settings"):
         num_pop = st.slider("Population Size (Genetic Diversity)", 20, 100, 40)
         num_gen = st.slider("Generations (Fine-tuning)", 5, 50, 20)
-        num_sim = 2000 # Balanced for speed vs accuracy
+        # Pro Tip: Lowering this to 500-1000 provides 4x speed with 99% accuracy
+        num_sim = st.select_slider("Simulation Sample Size", options=[500, 1000, 2000], value=1000)
 
     # Statistical Search Space
     avg_ltd = avg_demand * lead_time
     sigma_ltd = std_demand * np.sqrt(lead_time)
-    rop_floor, rop_ceil = int(max(0, avg_ltd - (1.0 * sigma_ltd))), int(avg_ltd + (6.0 * sigma_ltd))
+    rop_floor, rop_ceil = int(max(0, avg_ltd - (1.5 * sigma_ltd))), int(avg_ltd + (6.0 * sigma_ltd))
 
     # --- 2. OPTIMIZATION ENGINE ---
     if st.button("🚀 Run Vectorized Optimization"):
@@ -715,8 +716,12 @@ with tab3:
         status_text = st.empty()
         table_placeholder = st.empty()
         
-        # Pre-generate Demand Matrix (Guarding against negative demand)
+        # Constant for speed: Calculate once, use 365 times
+        daily_h_cost_unit = unit_value * holding_cost_rate / 365
+        
+        # Pre-generate Demand Matrix (The "Environment")
         demand_matrix = np.maximum(0, np.random.normal(avg_demand, std_demand, (num_sim, num_days))).round()
+        total_demand_per_scenario = demand_matrix.sum(axis=1)
         
         # Initialize Population [ROP, Q]
         bounds = [(rop_floor, rop_ceil), (100, int(avg_demand * 45))]
@@ -730,45 +735,51 @@ with tab3:
             gen_metrics = [] 
             
             for r_t, q_t in pop:
-                # --- RECTIFIED VECTORIZED SIMULATION ---
+                # --- VECTORIZED SIMULATION CORE ---
                 inventory = np.full(num_sim, opening_balance, dtype=float)
                 
-                # NEW: Pipeline Arrivals Matrix (Scenarios x Timeline)
-                # We add lead_time buffer to the array size to prevent index errors
-                arrivals_matrix = np.zeros((num_sim, num_days + lead_time + 1))
+                # Arrival Queue: Scenarios x (Days + LeadTime Buffer)
+                arrivals = np.zeros((num_sim, num_days + lead_time + 1))
+                # Track the total currently in the pipeline to avoid .sum() every day
+                pipeline_total = np.zeros(num_sim)
                 
                 so_days, total_unmet, h_costs, orders = [np.zeros(num_sim) for _ in range(4)]
                 scenario_peaks = np.zeros(num_sim)
 
                 for d in range(num_days):
-                    # A. Inbound: Add arriving stock for today
-                    inventory += arrivals_matrix[:, d]
+                    # 1. Deliver Arrivals & Update Pipeline Total
+                    landing_today = arrivals[:, d]
+                    inventory += landing_today
+                    pipeline_total -= landing_today
                     
-                    # B. Demand & Stockouts
+                    # 2. Daily Demand Process
                     d_today = demand_matrix[:, d]
-                    shortfall = np.maximum(0, d_today - inventory)
-                    so_days[shortfall > 0] += 1
-                    total_unmet += shortfall
+                    inventory -= d_today
                     
-                    # C. Inventory Update
-                    inventory = np.maximum(0, inventory - d_today)
-                    h_costs += (inventory * (unit_value * holding_cost_rate / 365))
+                    # 3. Handle Stockouts (Vectorized Masking)
+                    out_mask = (inventory < 0)
+                    if np.any(out_mask):
+                        so_days[out_mask] += 1
+                        total_unmet[out_mask] -= inventory[out_mask] # Subtracting neg adds to unmet
+                        inventory[out_mask] = 0
+                    
+                    # 4. Record peaks & Accumulate holding costs
                     scenario_peaks = np.maximum(scenario_peaks, inventory)
+                    h_costs += (inventory * daily_h_cost_unit)
                     
-                    # D. NEW: Pipeline Logic (Inventory Position)
-                    # Check what is already "on the water" for each scenario
-                    in_transit = arrivals_matrix[:, d+1:].sum(axis=1)
-                    inv_position = inventory + in_transit
+                    # 5. REORDER LOGIC: Inventory Position (Physical + Pipeline)
+                    # No .sum() needed here because we track pipeline_total
+                    inv_pos = inventory + pipeline_total
                     
-                    # E. Reorder if Position <= ROP
-                    reorder_mask = (inv_position <= r_t)
-                    
-                    # Schedule arrival exactly LT days in the future
-                    arrivals_matrix[reorder_mask, d + lead_time] += q_t
-                    orders[reorder_mask] += 1
+                    reorder_mask = (inv_pos <= r_t)
+                    if np.any(reorder_mask):
+                        # Schedule arrival and update tracking variable
+                        arrivals[reorder_mask, d + lead_time] += q_t
+                        pipeline_total[reorder_mask] += q_t
+                        orders[reorder_mask] += 1
 
-                # --- CALCULATE METRICS ---
-                fill_rates = (1 - (total_unmet / demand_matrix.sum(axis=1))) * 100
+                # --- CALCULATE AGGREGATED METRICS ---
+                fill_rates = (1 - (total_unmet / total_demand_per_scenario)) * 100
                 scenario_costs = h_costs + (orders * ordering_cost)
                 peak_wc_values = scenario_peaks * unit_value
                 
@@ -777,24 +788,22 @@ with tab3:
                 p99_wc = np.percentile(peak_wc_values, 99)
                 avg_cost = np.mean(scenario_costs)
 
-                # --- THE SMART PENALTY ENGINE ---
+                # --- PENALTY ENGINE ---
                 penalty = 0
                 if use_so_constraint and p99_so > target_so_days:
-                    penalty += (p99_so - target_so_days) * 10000
+                    penalty += (p99_so - target_so_days) * 20000 # Double penalty for strictness
                 if use_wc_constraint and p99_wc > max_wc_allowed:
-                    penalty += (p99_wc - max_wc_allowed) * 20 
+                    penalty += (p99_wc - max_wc_allowed) * 50 
                 if p1_fr < target_fr:
-                    penalty += (target_fr - p1_fr) * 15000
+                    penalty += (target_fr - p1_fr) * 25000
                 
-                score = avg_cost + penalty
-                fitness_scores.append(score)
+                fitness_scores.append(avg_cost + penalty)
                 gen_metrics.append({'cost': avg_cost, 'p99_wc': p99_wc, 'p99_so': p99_so, 'p1_fr': p1_fr})
 
             # --- SELECTION & EVOLUTION ---
             ranked_indices = np.argsort(fitness_scores)
             ranked_pop = [pop[i] for i in ranked_indices]
             best_idx = ranked_indices[0]
-            
             best_pol = ranked_pop[0]
             best_m = gen_metrics[best_idx]
             
@@ -806,45 +815,36 @@ with tab3:
                 "Peak WC (P99)": f"₹{round(best_m['p99_wc'],0):,}",
                 "SO Days (P99)": round(best_m['p99_so'], 1)
             })
-            table_placeholder.table(pd.DataFrame(stepwise_data).set_index("Gen").tail(5))
-            history.append(fitness_scores[best_idx] if fitness_scores[best_idx] < 1e7 else None)
+            table_placeholder.table(pd.DataFrame(stepwise_data).set_index("Gen").tail(3))
+            history.append(fitness_scores[best_idx] if fitness_scores[best_idx] < 1e8 else None)
 
-            # Genetic Crossover & Mutation
-            new_pop = ranked_pop[:4] # Elitism
+            # Crossover & Mutation
+            new_pop = ranked_pop[:4] # Elitism (Top 4 stay)
             while len(new_pop) < num_pop:
                 p1, p2 = random.sample(ranked_pop[:12], 2)
                 child = [int((p1[0]+p2[0])/2), int((p1[1]+p2[1])/2)]
                 if np.random.random() < 0.3: 
-                    child[0] = np.clip(child[0] + np.random.randint(-25, 25), rop_floor, rop_ceil)
+                    child[0] = np.clip(child[0] + np.random.randint(-30, 30), rop_floor, rop_ceil)
                 new_pop.append(child)
             pop = new_pop
             
             progress_bar.progress((gen + 1) / num_gen)
             status_text.text(f"Optimizing... Generation {gen+1}/{num_gen}")
 
-        # --- 3. FINAL RESULTS & SESSION STATE ---
+        # --- FINAL OUTPUT ---
         st.success(f"Optimization Complete in {round(time.time()-start_time, 2)}s")
+        st.session_state.best_policy = [ranked_pop[0][0], ranked_pop[0][1]]
         
-        best_final_r, best_final_q = ranked_pop[0]
-        st.session_state.best_policy = [best_final_r, best_final_q]
-        
-        st.subheader("✅ Optimized Strategy Summary")
         s1, s2, s3 = st.columns(3)
         with s1:
-            wc_ok = not use_wc_constraint or best_m['p99_wc'] <= max_wc_allowed
-            st.metric("Peak WC (P99)", f"₹{round(best_m['p99_wc'],0):,}", 
-                      delta="Met" if wc_ok else "Over Limit", delta_color="normal" if wc_ok else "inverse")
+            st.metric("Optimal ROP", f"{st.session_state.best_policy[0]}")
         with s2:
-            so_ok = not use_so_constraint or best_m['p99_so'] <= target_so_days
-            st.metric("Worst-Case Stockouts", f"{round(best_m['p99_so'],1)} Days", 
-                      delta="Met" if so_ok else "Over Limit", delta_color="normal" if so_ok else "inverse")
+            st.metric("Optimal Qty", f"{st.session_state.best_policy[1]}")
         with s3:
-            fr_ok = best_m['p1_fr'] >= target_fr
-            st.metric("Min. Fill Rate (P1)", f"{round(best_m['p1_fr'],2)}%", 
-                      delta="Met" if fr_ok else "Below Target", delta_color="normal" if fr_ok else "inverse")
+            st.metric("Min Fill Rate (P1)", f"{round(best_m['p1_fr'], 2)}%")
 
         if history:
-            st.plotly_chart(px.line(y=history, title="Minima Convergence Plot (Fitness Score)", markers=True))
+            st.plotly_chart(px.line(y=history, title="Learning Curve (Fitness Improvement)", markers=True))
 
 with tab4:
     st.header("🛡️ Strategy Validation & Impact")

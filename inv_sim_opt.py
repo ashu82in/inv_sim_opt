@@ -1087,7 +1087,7 @@ with tab3:
 with tab4:
     st.header("🛡️ Strategy Validation & Impact")
     
-    if 'best_policy' not in st.session_state:
+    if st.session_state.best_policy is None:
         st.warning("⚠️ Please run the AI Optimizer in Tab 3 first.")
         st.stop()
     else:

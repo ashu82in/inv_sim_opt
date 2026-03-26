@@ -213,16 +213,6 @@ with tab1:
         st.subheader("Simulation Data")
         st.dataframe(df)
 
-import numpy as np
-import pandas as pd
-import time
-import plotly.express as px
-
-import numpy as np
-import pandas as pd
-import time
-import plotly.express as px
-
 with tab2:
     st.header("🎲 Monte Carlo Risk & Sensitivity Analysis")
     
@@ -231,7 +221,7 @@ with tab2:
     with c_sim1:
         n_scenarios = st.number_input("Scenarios to Simulate", min_value=1, max_value=100000, value=2000)
     with c_sim2:
-        ruin_streak = st.slider("Consecutive days for 'Ruin'", 3, 15, 7)
+        ruin_streak = st.slider("Consecutive days for 'Ruin' (Streak)", 3, 15, 7)
 
     if st.button("🚀 Run Comprehensive Risk Test"):
         start_time = time.time()
@@ -244,32 +234,23 @@ with tab2:
 
         for idx, lt_val in enumerate(lt_tests):
             status_text.text(f"Simulating Lead Time: {lt_val} days...")
-            
-            # Vectorized Demand Generation
             demand_matrix = np.maximum(0, np.random.normal(avg_demand, std_demand, (n_scenarios, num_days))).round()
             
             # Simulation Arrays
             inventory = np.full(n_scenarios, opening_balance, dtype=float)
             arrival_days = np.full(n_scenarios, -1)
-            so_days = np.zeros(n_scenarios)
-            total_unmet = np.zeros(n_scenarios)
-            h_costs_accum = np.zeros(n_scenarios)
-            order_counts = np.zeros(n_scenarios)
-            daily_inv_sum = np.zeros(n_scenarios)
+            so_days, total_unmet, h_costs_accum, order_counts, daily_inv_sum = [np.zeros(n_scenarios) for _ in range(5)]
             
             # History tracking for Ruin and Recovery
-            # (Scenario x Day) matrix
             so_history = np.zeros((n_scenarios, num_days), dtype=int)
             inv_history = np.zeros((n_scenarios, num_days))
 
             # --- THE VECTORIZED CORE ---
             for d in range(num_days):
-                # Arrivals
                 arrived = (arrival_days == d)
                 inventory[arrived] += order_qty
                 arrival_days[arrived] = -1
                 
-                # Demand & Stockouts
                 d_today = demand_matrix[:, d]
                 is_out = (inventory < d_today)
                 so_days[is_out] += 1
@@ -279,27 +260,21 @@ with tab2:
                 inventory = np.maximum(0, inventory - d_today)
                 inv_history[:, d] = inventory
                 
-                # Financials & Stats
                 h_costs_accum += (inventory * (unit_value * holding_cost_rate / 365))
                 daily_inv_sum += inventory
                 
-                # Reordering
                 reorder_mask = (inventory <= reorder_point) & (arrival_days == -1)
                 arrival_days[reorder_mask] = d + lt_val
                 order_counts[reorder_mask] += 1
 
             # --- CALCULATE RISK OF RUIN & RECOVERY ---
-            # Ruin Check: 7-day streaks
             has_ruin = np.zeros(n_scenarios, dtype=bool)
             recovery_times = np.zeros(n_scenarios)
 
             for s in range(n_scenarios):
-                # Ruin
                 streaks = np.convolve(so_history[s, :], np.ones(ruin_streak), mode='valid')
-                if np.any(streaks >= ruin_streak):
-                    has_ruin[s] = True
+                if np.any(streaks >= ruin_streak): has_ruin[s] = True
                 
-                # Recovery: Days from first stockout to returning to ROP
                 out_days = np.where(so_history[s, :] == 1)[0]
                 if len(out_days) > 0:
                     first_out = out_days[0]
@@ -320,7 +295,6 @@ with tab2:
             sensitivity_results.append(lt_df)
             progress_bar.progress((idx + 1) / len(lt_tests))
 
-        # 4. DATA DISPLAY
         res_df = pd.concat(sensitivity_results)
         curr_df = res_df[res_df["Tested LT"] == lead_time]
         st.success(f"Simulated {len(res_df):,} paths in {round(time.time()-start_time, 2)}s.")
@@ -333,47 +307,46 @@ with tab2:
         k3.metric("Avg Annual Cost", f"₹{round(curr_df['total_cost'].mean(), 0)}")
         k4.metric("WC Risk (95th Pctl)", f"₹{round(curr_df['avg_wc'].quantile(0.95), 0)}")
 
-        # --- SECTION 2: RESILIENCE & RECOVERY ---
-        st.write("#### 🛡️ System Resilience Probabilities")
-        r1, r2, r3, r4 = st.columns(4)
-        
-        with r1:
+        # --- SECTION 2: STOCKOUT PROBABILITIES (RESTORED) ---
+        st.write("#### 🛡️ Stockout Risk Probabilities")
+        d_1, d_5, d_10 = round(num_days*0.01, 1), round(num_days*0.05, 1), round(num_days*0.10, 1)
+        p1, p2, p3, p4 = st.columns(4)
+        with p1:
+            val_no_so = (curr_df['stockout_days'] == 0).mean() * 100
+            st.metric("Prob: No Stockouts", f"{round(val_no_so, 2)}%")
+            st.caption("Zero stockout days all year.")
+        with p2:
+            val_1 = (curr_df['stockout_days'] < d_1).mean() * 100
+            st.metric("Stockouts < 1% Days", f"{round(val_1, 2)}%")
+            st.caption(f"Less than {d_1} days.")
+        with p3:
+            val_5 = (curr_df['stockout_days'] < d_5).mean() * 100
+            st.metric("Stockouts < 5% Days", f"{round(val_5, 2)}%")
+            st.caption(f"Less than {d_5} days.")
+        with p4:
             val_ruin = curr_df['is_ruined'].mean() * 100
             st.metric(f"Risk of Ruin ({ruin_streak}d)", f"{round(val_ruin, 2)}%")
-            st.caption(f"Chance of a {ruin_streak}-day total stockout streak.")
-        with r2:
-            avg_rec = curr_df[curr_df['recovery_time'] > 0]['recovery_time'].mean()
-            st.metric("Avg Recovery Time", f"{round(avg_rec, 1)} Days")
-            st.caption("Time to return to safety after a stockout.")
-        with r3:
-            val1 = (curr_df['stockout_days'] == 0).mean() * 100
-            st.metric("Prob: No Stockouts", f"{round(val1, 2)}%")
-            st.caption("Chance of zero stockout days all year.")
-        with r4:
-            fragility = (curr_df['recovery_time'] > lead_time).mean() * 100
-            st.metric("System Fragility", f"{round(fragility, 1)}%")
-            st.caption(f"Chance recovery takes > {lead_time} days.")
+            st.caption(f"Chance of {ruin_streak}-day streak.")
 
         # --- SECTION 3: SENSITIVITY TABLE ---
         st.divider()
         st.write("### 📋 Lead Time Sensitivity Table")
         sens_table = res_df.groupby("Tested LT").agg({
-            "fill_rate": "mean", "stockout_days": "mean", "total_cost": "mean", "is_ruined": "mean"
-        })
-        sens_table["is_ruined"] = sens_table["is_ruined"] * 100
-        sens_table.columns = ["Avg Fill Rate (%)", "Avg Stockout Days", "Avg Cost (₹)", "Risk of Ruin (%)"]
-        
-        styled_sens = sens_table.style.format("{:.2f}")\
-            .highlight_max(subset=["Avg Stockout Days", "Avg Cost (₹)", "Risk of Ruin (%)"], props='background-color: #FF4B4B; color: black;')\
-            .highlight_min(subset=["Avg Fill Rate (%)"], props='background-color: #FF4B4B; color: black;')
-        st.table(styled_sens)
+            "fill_rate": "mean", "stockout_days": "mean", "total_cost": "mean", "avg_wc": "mean"
+        }).rename(columns={"fill_rate":"Avg Fill Rate (%)", "stockout_days":"Avg Stockout Days", "total_cost":"Avg Cost (₹)", "avg_wc":"Avg Working Capital (₹)"})
+        st.table(sens_table.style.format("{:.2f}").highlight_max(subset=["Avg Stockout Days", "Avg Cost (₹)"], props='background-color: #FF4B4B; color: black;'))
 
-        # --- SECTION 4: RISK DISTRIBUTIONS ---
+        # --- SECTION 4: 4-GRID RISK DISTRIBUTIONS (RESTORED) ---
         st.divider()
         st.write("### 📈 Risk Distributions")
-        d1, d2 = st.columns(2)
-        d1.plotly_chart(px.histogram(curr_df, x="fill_rate", title="Fill Rate Distribution", color_discrete_sequence=['#00CC96']), use_container_width=True)
-        d2.plotly_chart(px.histogram(curr_df, x="recovery_time", title="Recovery Time (Days) Distribution", color_discrete_sequence=['#636EFA']), use_container_width=True)
+        r1c1, r1c2 = st.columns(2)
+        r1c1.plotly_chart(px.histogram(curr_df, x="fill_rate", title="Fill Rate % Distribution", color_discrete_sequence=['#00CC96']), use_container_width=True)
+        r1c2.plotly_chart(px.histogram(curr_df, x="total_cost", title="Total Cost Distribution", color_discrete_sequence=['#EF553B']), use_container_width=True)
+
+        r2c1, r2c2 = st.columns(2)
+        r2c1.plotly_chart(px.histogram(curr_df, x="stockout_days", title="Stockout Severity (Days)", color_discrete_sequence=['#FFA15A']), use_container_width=True)
+        r2c2.plotly_chart(px.histogram(curr_df, x="recovery_time", title="Recovery Time (Days) Distribution", color_discrete_sequence=['#636EFA']), use_container_width=True)
+
 
 with tab3:
     st.header("🧬 AI Inventory Optimizer")

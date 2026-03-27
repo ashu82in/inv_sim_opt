@@ -931,6 +931,7 @@ with tab3:
                         delta_color="normal" if m['wc'] <= st.session_state.max_wc_limit else "inverse")
 
         # --- 4. HIGH-VISIBILITY STRATEGIC HEATMAPS ---
+       # --- 4. HIGH-VISIBILITY STRATEGIC HEATMAPS ---
         st.divider()
         st.subheader("🌡️ Strategic Resilience Heatmaps")
         if st.button("🌡️ Generate Full-Width Heatmaps"):
@@ -964,11 +965,37 @@ with tab3:
             ]
 
             for idx, title, scale in heatmap_config:
-                fig = px.imshow(sim_matrix[:, :, idx], x=q_range, y=rop_range, color_continuous_scale=scale, 
-                                title=title, height=700, aspect="auto")
-                # Forces rows to be significantly taller relative to width
-                fig.update_yaxes(scaleanchor="x", scaleratio=0.3, constrain='domain')
-                fig.update_layout(coloraxis_colorbar=dict(lenmode="fraction", len=0.85, yanchor="middle", y=0.5))
+                # Calculate color limits to prevent bar-graph mismatch
+                z_data = sim_matrix[:, :, idx]
+                
+                fig = px.imshow(
+                    z_data, 
+                    x=q_range, 
+                    y=rop_range, 
+                    color_continuous_scale=scale, 
+                    title=title, 
+                    height=600, 
+                    aspect="auto"
+                )
+                
+                # THE FIX: scaleratio < 1 makes the rows taller. 
+                # Since your x-axis (300-1100) is much wider than y-axis (50-100),
+                # we use a very small scaleratio to force the rows to expand vertically.
+                fig.update_yaxes(
+                    scaleanchor="x", 
+                    scaleratio=0.05,  # Reduced significantly to stretch height
+                    constrain='domain'
+                )
+                
+                fig.update_layout(
+                    coloraxis_colorbar=dict(
+                        lenmode="fraction", 
+                        len=1.0, # Forces bar to match full plot height
+                        yanchor="middle", 
+                        y=0.5
+                    ),
+                    margin=dict(l=50, r=50, t=80, b=50)
+                )
                 st.plotly_chart(fig, use_container_width=True)
 
         # --- 5. INTERACTIVE SANDBOX ---

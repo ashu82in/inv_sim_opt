@@ -956,8 +956,12 @@ with tab3:
                     sim_matrix[i, j, 3] = so.mean()
 
             # Individual rows for maximum visibility
-            st.plotly_chart(px.imshow(sim_matrix[:,:,0], x=q_range, y=rop_range, color_continuous_scale='RdYlGn', 
-                                     title="Average Fill Rate %", height=1000), use_container_width=True)
+            fig1 = px.imshow(sim_matrix[:,:,0], x=q_range, y=rop_range, 
+                             color_continuous_scale='RdYlGn', title="Avg Fill Rate %", height=700)
+            fig1.update_yaxes(scaleanchor="x", scaleratio=1.2) # Makes rows 20% taller than wide
+            st.plotly_chart(fig1, use_container_width=True)
+            # st.plotly_chart(px.imshow(sim_matrix[:,:,0], x=q_range, y=rop_range, color_continuous_scale='RdYlGn', 
+            #                          title="Average Fill Rate %", height=600), use_container_width=True)
             st.plotly_chart(px.imshow(sim_matrix[:,:,1], x=q_range, y=rop_range, color_continuous_scale='RdYlGn_r', 
                                      title="Average Total Cost (₹)", height=600), use_container_width=True)
             st.plotly_chart(px.imshow(sim_matrix[:,:,3], x=q_range, y=rop_range, color_continuous_scale='RdYlGn_r', 

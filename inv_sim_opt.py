@@ -818,7 +818,7 @@ with tab2:
 with tab3:
     st.header("🧬 Adaptive AI Optimizer")
     
-    # --- 1. SETTINGS & GUARDRAILS ---
+    # --- 1. BUSINESS CONSTRAINTS & GLOBAL CONSTANTS ---
     st.subheader("Business Guardrails")
     col_c1, col_c2 = st.columns(2)
     with col_c1:
@@ -828,42 +828,47 @@ with tab3:
     with col_c2:
         use_wc_constraint = st.toggle("Limit Peak Working Capital (P99)", value=True)
         if use_wc_constraint:
-            max_wc_input = st.number_input("Maximum Cash Ceiling (₹)", value=150000, step=5000)
-            st.session_state.max_wc_limit = max_wc_input
+            st.session_state.max_wc_limit = st.number_input("Maximum Cash Ceiling (₹)", value=150000, step=5000)
         else:
-            st.session_state.max_wc_limit = 999999999 
+            st.session_state.max_wc_limit = 999999999
 
-    # --- 2. THE ENGINE ---
-    # Global constant calculation to prevent NameErrors in Heatmap/Sandbox
+    with st.expander("⚙️ Advanced Optimizer Tuning"):
+        st.session_state.n_opt_sim = st.select_slider("Simulation Precision", options=[500, 1000, 2000], value=1000)
+        num_pop = st.slider("Population Size", 20, 100, 40)
+        max_gen = st.slider("Max Generations", 20, 300, 100)
+        patience = st.number_input("Patience (Stable Generations)", value=10)
+
+    # Define cost constant globally within the tab to prevent NameErrors in Heatmap
     daily_h_unit_val = unit_value * holding_cost_rate / 365
 
+    # --- 2. THE OPTIMIZATION ENGINE ---
     if st.button("🚀 Run Adaptive Optimization"):
         progress_bar = st.progress(0)
         status_text = st.empty()
         
-        demand_matrix = np.maximum(0, np.random.normal(avg_demand, std_demand, (n_opt_sim, num_days))).round()
+        n_sim = st.session_state.n_opt_sim
+        demand_matrix = np.maximum(0, np.random.normal(avg_demand, std_demand, (n_sim, num_days))).round()
         total_d_scenario = demand_matrix.sum(axis=1)
         
         avg_ltd = avg_demand * lead_time
         sigma_ltd = std_demand * np.sqrt(lead_time)
         rop_f, rop_c = int(max(0, avg_ltd - (2.5*sigma_ltd))), int(avg_ltd + (8*sigma_ltd))
-        
         pop = [[random.randint(rop_f, rop_c), random.randint(100, int(avg_demand * 45))] for _ in range(num_pop)]
-        history = []
+        
         best_fitness_overall, gens_without_imp = float('inf'), 0
+        history = []
 
         for gen in range(max_gen):
             fitness_scores, gen_metrics = [], []
             for r_t, q_t in pop:
-                inv = np.full(n_opt_sim, opening_balance, dtype=float)
-                arrivals = np.zeros((n_opt_sim, num_days + lead_time + 1))
-                pipeline_total, so, unmet, h_costs, orders, peaks = [np.zeros(n_opt_sim) for _ in range(6)]
+                inv = np.full(n_sim, opening_balance, dtype=float)
+                arrivals = np.zeros((n_sim, num_days + lead_time + 1))
+                pipeline_total, so, unmet, h_costs, orders, peaks = [np.zeros(n_sim) for _ in range(6)]
 
                 for d in range(num_days):
                     inv += arrivals[:, d]; pipeline_total -= arrivals[:, d]; inv -= demand_matrix[:, d]
                     o_m = inv < 0; so += o_m; unmet -= np.where(o_m, inv, 0); inv = np.where(o_m, 0, inv)
-                    peaks = np.maximum(peaks, inv)
-                    h_costs += (inv * daily_h_unit_val) # Using the robust global constant
+                    peaks = np.maximum(peaks, inv); h_costs += (inv * daily_h_unit_val)
                     r_m = (inv + pipeline_total <= r_t); arrivals[r_m, d + lead_time] = q_t 
                     pipeline_total += np.where(r_m, q_t, 0); orders += r_m
 
@@ -894,7 +899,8 @@ with tab3:
             new_pop = ranked_pop[:4] 
             while len(new_pop) < num_pop:
                 p1, p2 = random.sample(ranked_pop[:12], 2)
-                child = [int((p1[0]+p2[0])/2), int((p1[1]+p2[1])/2)]; child[0] = np.clip(child[0] + random.randint(-15,15), rop_f, rop_c)
+                child = [int((p1[0]+p2[0])/2), int((p1[1]+p2[1])/2)]
+                child[0] = np.clip(child[0] + random.randint(-15,15), rop_f, rop_c)
                 new_pop.append(child)
             pop = new_pop
 
@@ -904,22 +910,19 @@ with tab3:
 
     # --- 3. AUDIT DASHBOARD ---
     if st.session_state.get('opt_done'):
-        m = st.session_state.best_m
-        p = st.session_state.best_policy
-        
+        m, p = st.session_state.best_m, st.session_state.best_policy
         st.divider()
         st.subheader("✅ AI Optimized Strategy Audit")
         
         r1c1, r1c2, r1c3, r1c4 = st.columns(4)
-        r1c1.metric("Optimal Strategy (ROP/Q)", f"{p[0]} / {p[1]}")
+        r1c1.metric("Optimal ROP/Q", f"{p[0]} / {p[1]}")
         r1c2.metric("Min Fill Rate (P1)", f"{m['fr_p1']:.1f}%")
         r1c3.metric("Avg Fill Rate", f"{m['fr_avg']:.1f}%")
         r1c4.metric("Stockout Risk (P99)", f"{m['so']:.1f} Days")
 
         r2c1, r2c2, r2c3 = st.columns(3)
         r2c1.metric("Annual Total Cost", f"₹{m['cost']:,.0f}")
-        r2c2.metric("Expected Orders / Year", f"{round(m['orders'], 1)}")
-        
+        r2c2.metric("Orders / Year", f"{round(m['orders'], 1)}")
         if use_wc_constraint:
             r2c3.metric("Peak Working Capital", f"₹{m['wc']:,.0f}", 
                         delta="PASS ✅" if m['wc'] <= st.session_state.max_wc_limit else "FAIL ❌", 
@@ -928,38 +931,35 @@ with tab3:
         # --- 4. SENSITIVITY HEATMAP SUITE ---
         st.divider()
         st.subheader("🌡️ Strategic Resilience Heatmaps")
-        if st.button("🌡️ Generate Strategic Heatmap Suite"):
+        if st.button("🌡️ Generate Heatmap Suite"):
             n_steps = 10
-            lt_f = lead_time if lead_time > 0 else 1
-            rop_range = np.linspace(max(0, p[0] - avg_demand * lt_f * 0.5), p[0] + avg_demand * lt_f * 1.5, n_steps).astype(int)
-            q_range = np.linspace(max(50, p[1] - avg_demand * 10), p[1] + avg_demand * 40, n_steps).astype(int)
-            
+            rop_range = np.linspace(max(0, p[0]*0.5), p[0]*1.5, n_steps).astype(int)
+            q_range = np.linspace(max(50, p[1]*0.5), p[1]*1.5, n_steps).astype(int)
             sim_matrix = np.zeros((n_steps, n_steps, 4)) 
-            h_demands = np.maximum(0, np.random.normal(avg_demand, std_demand, (500, num_days))).round()
+            h_dem = np.maximum(0, np.random.normal(avg_demand, std_demand, (500, num_days))).round()
             
             for i, h_rop in enumerate(rop_range):
                 for j, h_q in enumerate(q_range):
-                    h_inv = np.full(500, opening_balance, dtype=float); h_arr = np.zeros((500, num_days + lead_time + 1))
-                    h_pip, h_so, h_unmet, h_peaks, h_orders = [np.zeros(500) for _ in range(5)]
+                    inv = np.full(500, opening_balance, dtype=float); arr = np.zeros((500, num_days + lead_time + 1))
+                    pip, so, unmet, peaks, ords = [np.zeros(500) for _ in range(5)]
                     for d in range(num_days):
-                        h_inv += h_arr[:, d]; h_pip -= h_arr[:, d]; h_inv -= h_demands[:, d]
-                        o_m = h_inv < 0; h_so += o_m; h_unmet -= np.where(o_m, h_inv, 0); h_inv = np.where(o_m, 0, h_inv)
-                        h_peaks = np.maximum(h_peaks, h_inv)
-                        r_m = (h_inv + h_pip <= h_rop); h_arr[r_m, d + lead_time] = h_q; h_pip += np.where(r_m, h_q, 0); h_orders += r_m
+                        inv += arr[:, d]; pip -= arr[:, d]; inv -= h_dem[:, d]
+                        o_m = inv < 0; so += o_m; unmet -= np.where(o_m, inv, 0); inv = np.where(o_m, 0, inv)
+                        peaks = np.maximum(peaks, inv)
+                        r_m = (inv + pip <= h_rop); arr[r_m, d + lead_time] = h_q; pip += np.where(r_m, h_q, 0); ords += r_m
 
-                    sim_matrix[i, j, 0] = (1 - (h_unmet / h_demands.sum(axis=1))).mean() * 100
-                    # FIXED: Using the global daily_h_unit_val here
-                    sim_matrix[i, j, 1] = (h_peaks.mean() * unit_value * holding_cost_rate) + (h_orders.mean() * ordering_cost)
-                    sim_matrix[i, j, 2] = h_peaks.mean() * unit_value
-                    sim_matrix[i, j, 3] = h_so.mean()
+                    sim_matrix[i, j, 0] = (1 - (unmet / h_dem.sum(axis=1))).mean() * 100
+                    sim_matrix[i, j, 1] = (peaks.mean() * unit_value * holding_cost_rate) + (ords.mean() * ordering_cost)
+                    sim_matrix[i, j, 2] = peaks.mean() * unit_value
+                    sim_matrix[i, j, 3] = so.mean()
 
             mc1, mc2 = st.columns(2)
             with mc1:
-                st.plotly_chart(px.imshow(sim_matrix[:, :, 0], labels=dict(x="Qty", y="ROP", color="FR%"), x=q_range, y=rop_range, color_continuous_scale='RdYlGn', title="Avg Fill Rate"), use_container_width=True)
-                st.plotly_chart(px.imshow(sim_matrix[:, :, 1], labels=dict(x="Qty", y="ROP", color="Cost"), x=q_range, y=rop_range, color_continuous_scale='RdYlGn_r', title="Avg Total Cost"), use_container_width=True)
+                st.plotly_chart(px.imshow(sim_matrix[:,:,0], x=q_range, y=rop_range, color_continuous_scale='RdYlGn', title="Avg Fill Rate %"), use_container_width=True)
+                st.plotly_chart(px.imshow(sim_matrix[:,:,1], x=q_range, y=rop_range, color_continuous_scale='RdYlGn_r', title="Avg Total Cost (₹)"), use_container_width=True)
             with mc2:
-                st.plotly_chart(px.imshow(sim_matrix[:, :, 3], labels=dict(x="Qty", y="ROP", color="Days"), x=q_range, y=rop_range, color_continuous_scale='RdYlGn_r', title="Avg Stockout Days"), use_container_width=True)
-                st.plotly_chart(px.imshow(sim_matrix[:, :, 2], labels=dict(x="Qty", y="ROP", color="WC"), x=q_range, y=rop_range, color_continuous_scale='RdYlGn_r', title="Avg Working Capital"), use_container_width=True)
+                st.plotly_chart(px.imshow(sim_matrix[:,:,3], x=q_range, y=rop_range, color_continuous_scale='RdYlGn_r', title="Avg Stockout Days"), use_container_width=True)
+                st.plotly_chart(px.imshow(sim_matrix[:,:,2], x=q_range, y=rop_range, color_continuous_scale='RdYlGn_r', title="Avg Working Capital (₹)"), use_container_width=True)
 
         # --- 5. INTERACTIVE SANDBOX & DELTA TABLE ---
         st.divider()
@@ -972,26 +972,24 @@ with tab3:
             n_s = 2000
             s_dem = np.maximum(0, np.random.normal(avg_demand, std_demand, (n_s, num_days))).round()
             s_inv = np.full(n_s, opening_balance, dtype=float); s_arr = np.zeros((n_s, num_days + lead_time + 1))
-            s_pip, s_so, s_unmet, s_peaks, s_orders = [np.zeros(n_s) for _ in range(5)]
+            s_pip, s_so, s_unmet, s_peaks, s_ords = [np.zeros(n_s) for _ in range(5)]
             for d in range(num_days):
                 s_inv += s_arr[:, d]; s_pip -= s_arr[:, d]; s_inv -= s_dem[:, d]
                 o_m = s_inv < 0; s_so += o_m; s_unmet -= np.where(o_m, s_inv, 0); s_inv = np.where(o_m, 0, s_inv)
                 s_peaks = np.maximum(s_peaks, s_inv)
-                r_m = (s_inv + s_pip <= u_rop); s_arr[r_m, d + lead_time] = u_q; s_pip += np.where(r_m, u_q, 0); s_orders += r_m
+                r_m = (s_inv + s_pip <= u_rop); s_arr[r_m, d + lead_time] = u_q; s_pip += np.where(r_m, u_q, 0); s_ords += r_m
 
             u_all_fr = (1 - (s_unmet / s_dem.sum(axis=1))) * 100
             u_fr_avg, u_fr_p1 = u_all_fr.mean(), np.percentile(u_all_fr, 1)
             u_wc = np.percentile(s_peaks, 99) * unit_value
-            u_cost = (s_peaks.mean() * unit_value * holding_cost_rate) + (s_orders.mean() * ordering_cost)
+            u_cost = (s_peaks.mean() * unit_value * holding_cost_rate) + (s_ords.mean() * ordering_cost)
             
-            st.write("#### Strategy Comparison Table")
-            comp_df = pd.DataFrame({
+            st.table(pd.DataFrame({
                 "KPI": ["Policy (ROP/Q)", "Avg Fill Rate", "Min Fill Rate (P1)", "Peak Working Capital", "Annual Total Cost"],
                 "AI Optimized": [f"{p[0]} / {p[1]}", f"{m['fr_avg']:.2f}%", f"{m['fr_p1']:.2f}%", f"₹{m['wc']:,.0f}", f"₹{m['cost']:,.0f}"],
                 "Your Custom": [f"{u_rop} / {u_q}", f"{u_fr_avg:.2f}%", f"{u_fr_p1:.2f}%", f"₹{u_wc:,.0f}", f"₹{u_cost:,.0f}"],
                 "Delta": ["-", f"{u_fr_avg - m['fr_avg']:.2f}%", f"{u_fr_p1 - m['fr_p1']:.2f}%", f"₹{u_wc - m['wc']:,.0f}", f"₹{u_cost - m['cost']:,.0f}"]
-            })
-            st.table(comp_df)
+            }))
 # with tab3:
 #     st.header("🧬 AI Inventory Optimizer")
     

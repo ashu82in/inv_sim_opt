@@ -818,7 +818,7 @@ with tab2:
 with tab3:
     st.header("🧬 Adaptive AI Optimizer")
     
-    # --- 1. SETTINGS & PERSISTENT PARAMETERS ---
+    # --- 1. BUSINESS CONSTRAINTS ---
     st.subheader("Business Guardrails")
     col_c1, col_c2 = st.columns(2)
     with col_c1:
@@ -828,22 +828,21 @@ with tab3:
     with col_c2:
         use_wc_constraint = st.toggle("Limit Peak Working Capital (P99)", value=True)
         if use_wc_constraint:
-            # Persistent WC Limit
             st.session_state.max_wc_limit = st.number_input("Maximum Cash Ceiling (₹)", value=150000, step=5000)
         else:
             st.session_state.max_wc_limit = 999999999
 
     with st.expander("⚙️ Advanced Optimizer Tuning"):
-        # PERSISTENT SIM PARAMETERS to prevent NameErrors
+        # FIX: Global session state to prevent NameErrors
         st.session_state.n_opt_sim = st.select_slider("Simulation Precision", options=[500, 1000, 2000], value=1000)
         num_pop = st.slider("Population Size", 20, 100, 40)
         max_gen = st.slider("Max Generations", 20, 300, 100)
         patience = st.number_input("Patience (Stable Generations)", value=10)
 
-    # Robust Constant Definition
+    # Global constant to prevent NameError in Heatmap
     daily_h_unit_val = unit_value * holding_cost_rate / 365
 
-    # --- 2. OPTIMIZATION ENGINE ---
+    # --- 2. THE ENGINE ---
     if st.button("🚀 Run Adaptive Optimization"):
         progress_bar = st.progress(0)
         status_text = st.empty()
@@ -885,6 +884,7 @@ with tab3:
                 if fr_p1 < t_fr: penalty += (t_fr - fr_p1) * 45000
                 
                 fitness_scores.append(avg_cost + penalty)
+                # Key synchronization to prevent KeyError
                 gen_metrics.append({'cost': avg_cost, 'fr_p1': fr_p1, 'fr_avg': fr_avg, 'so': so_p99, 'wc': wc_p99, 'orders': orders.mean()})
 
             best_idx = np.argmin(fitness_scores)
@@ -893,7 +893,7 @@ with tab3:
             else: gens_without_imp += 1
             
             history.append(fitness_scores[best_idx])
-            status_text.text(f"Gen {gen+1}: Stability {gens_without_imp}/{patience}")
+            status_text.text(f"Gen {gen+1}: Finding Balance... (Patience {gens_without_imp}/{patience})")
             progress_bar.progress((gen + 1) / max_gen)
             if gens_without_imp >= patience: break
             
@@ -910,14 +910,14 @@ with tab3:
         st.session_state.best_m = gen_metrics[best_idx]
         st.session_state.opt_done = True
 
-    # --- 3. AUDIT DASHBOARD ---
+    # --- 3. FINAL AUDIT DASHBOARD ---
     if st.session_state.get('opt_done'):
         m, p = st.session_state.best_m, st.session_state.best_policy
         st.divider()
         st.subheader("✅ AI Optimized Strategy Audit")
         
         r1c1, r1c2, r1c3, r1c4 = st.columns(4)
-        r1c1.metric("Optimal ROP/Q", f"{p[0]} / {p[1]}")
+        r1c1.metric("Optimal Strategy (ROP/Q)", f"{p[0]} / {p[1]}")
         r1c2.metric("Min Fill Rate (P1)", f"{m['fr_p1']:.1f}%")
         r1c3.metric("Avg Fill Rate", f"{m['fr_avg']:.1f}%")
         r1c4.metric("Stockout Risk (P99)", f"{m['so']:.1f} Days")
@@ -930,7 +930,7 @@ with tab3:
                         delta="PASS ✅" if m['wc'] <= st.session_state.max_wc_limit else "FAIL ❌", 
                         delta_color="normal" if m['wc'] <= st.session_state.max_wc_limit else "inverse")
 
-        # --- 4. HIGH-VISIBILITY HEATMAP SUITE ---
+        # --- 4. HIGH-VISIBILITY STRATEGIC HEATMAPS ---
         st.divider()
         st.subheader("🌡️ Strategic Resilience Heatmaps")
         if st.button("🌡️ Generate Full-Width Heatmaps"):
@@ -955,23 +955,51 @@ with tab3:
                     sim_matrix[i, j, 2] = peaks.mean() * unit_value
                     sim_matrix[i, j, 3] = so.mean()
 
-            # Individual rows for maximum visibility
-            fig1 = px.imshow(sim_matrix[:,:,0], x=q_range, y=rop_range, 
-                             color_continuous_scale='RdYlGn', title="Avg Fill Rate %", height=700)
-            fig1.update_yaxes(scaleanchor="x", scaleratio=1.2) # Makes rows 20% taller than wide
-            st.plotly_chart(fig1, use_container_width=True)
-            # st.plotly_chart(px.imshow(sim_matrix[:,:,0], x=q_range, y=rop_range, color_continuous_scale='RdYlGn', 
-            #                          title="Average Fill Rate %", height=600), use_container_width=True)
-            st.plotly_chart(px.imshow(sim_matrix[:,:,1], x=q_range, y=rop_range, color_continuous_scale='RdYlGn_r', 
-                                     title="Average Total Cost (₹)", height=600), use_container_width=True)
-            st.plotly_chart(px.imshow(sim_matrix[:,:,3], x=q_range, y=rop_range, color_continuous_scale='RdYlGn_r', 
-                                     title="Average Stockout Days", height=600), use_container_width=True)
-            st.plotly_chart(px.imshow(sim_matrix[:,:,2], x=q_range, y=rop_range, color_continuous_scale='RdYlGn_r', 
-                                     title="Average Working Capital (₹)", height=600), use_container_width=True)
+            # Fix for Row Height and Color Bar Alignment
+            heatmap_config = [
+                (0, "Average Fill Rate %", "RdYlGn"),
+                (1, "Average Total Cost (₹)", "RdYlGn_r"),
+                (3, "Average Stockout Days", "RdYlGn_r"),
+                (2, "Average Working Capital (₹)", "RdYlGn_r")
+            ]
+
+            for idx, title, scale in heatmap_config:
+                fig = px.imshow(sim_matrix[:, :, idx], x=q_range, y=rop_range, color_continuous_scale=scale, 
+                                title=title, height=700, aspect="auto")
+                # Forces rows to be significantly taller relative to width
+                fig.update_yaxes(scaleanchor="x", scaleratio=0.3, constrain='domain')
+                fig.update_layout(coloraxis_colorbar=dict(lenmode="fraction", len=0.85, yanchor="middle", y=0.5))
+                st.plotly_chart(fig, use_container_width=True)
 
         # --- 5. INTERACTIVE SANDBOX ---
         st.divider()
         st.subheader("🎮 Interactive Strategy Sandbox")
+        sc1, sc2 = st.columns(2)
+        u_rop = sc1.number_input("Your Custom ROP", value=int(p[0]), step=10)
+        u_q = sc2.number_input("Your Custom Order Qty", value=int(p[1]), step=10)
+
+        if st.button("🧮 Test My Strategy"):
+            n_s = 2000
+            s_dem = np.maximum(0, np.random.normal(avg_demand, std_demand, (n_s, num_days))).round()
+            s_inv = np.full(n_s, opening_balance, dtype=float); s_arr = np.zeros((n_s, num_days + lead_time + 1))
+            s_pip, s_so, s_unmet, s_peaks, s_ords = [np.zeros(n_s) for _ in range(5)]
+            for d in range(num_days):
+                s_inv += s_arr[:, d]; s_pip -= s_arr[:, d]; s_inv -= s_dem[:, d]
+                o_m = s_inv < 0; s_so += o_m; s_unmet -= np.where(o_m, s_inv, 0); s_inv = np.where(o_m, 0, s_inv)
+                s_peaks = np.maximum(s_peaks, s_inv)
+                r_m = (s_inv + s_pip <= u_rop); s_arr[r_m, d + lead_time] = u_q; s_pip += np.where(r_m, u_q, 0); s_ords += r_m
+
+            u_all_fr = (1 - (s_unmet / s_dem.sum(axis=1))) * 100
+            u_fr_avg, u_fr_p1 = u_all_fr.mean(), np.percentile(u_all_fr, 1)
+            u_wc = np.percentile(s_peaks, 99) * unit_value
+            u_cost = (s_peaks.mean() * unit_value * holding_cost_rate) + (s_ords.mean() * ordering_cost)
+            
+            st.table(pd.DataFrame({
+                "KPI": ["Policy (ROP/Q)", "Avg Fill Rate", "Min Fill Rate (P1)", "Peak Working Capital", "Annual Total Cost"],
+                "AI Optimized": [f"{p[0]} / {p[1]}", f"{m['fr_avg']:.2f}%", f"{m['fr_p1']:.2f}%", f"₹{m['wc']:,.0f}", f"₹{m['cost']:,.0f}"],
+                "Your Custom": [f"{u_rop} / {u_q}", f"{u_fr_avg:.2f}%", f"{u_fr_p1:.2f}%", f"₹{u_wc:,.0f}", f"₹{u_cost:,.0f}"],
+                "Delta": ["-", f"{u_fr_avg - m['fr_avg']:.2f}%", f"{u_fr_p1 - m['fr_p1']:.2f}%", f"₹{u_wc - m['wc']:,.0f}", f"₹{u_cost - m['cost']:,.0f}"]
+            }))
         # [Sandbox code from previous step]
 # with tab3:
 #     st.header("🧬 AI Inventory Optimizer")

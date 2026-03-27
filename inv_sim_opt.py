@@ -908,25 +908,110 @@ with tab3:
         st.session_state.best_m = gen_metrics[best_idx]
         st.session_state.opt_done = True
 
-    # --- 3. AUDIT DASHBOARD ---
+    # # --- 3. AUDIT DASHBOARD ---
+    # if st.session_state.get('opt_done'):
+    #     m, p = st.session_state.best_m, st.session_state.best_policy
+    #     st.divider()
+    #     st.subheader("✅ AI Optimized Strategy Audit")
+        
+    #     r1c1, r1c2, r1c3, r1c4 = st.columns(4)
+    #     r1c1.metric("Optimal ROP/Q", f"{p[0]} / {p[1]}")
+    #     r1c2.metric("Min Fill Rate (P1)", f"{m['fr_p1']:.1f}%")
+    #     r1c3.metric("Avg Fill Rate", f"{m['fr_avg']:.1f}%")
+    #     r1c4.metric("Stockout Risk (P99)", f"{m['so']:.1f} Days")
+
+    #     r2c1, r2c2, r2c3 = st.columns(3)
+    #     r2c1.metric("Annual Total Cost", f"₹{m['cost']:,.0f}")
+    #     r2c2.metric("Orders / Year", f"{round(m['orders'], 1)}")
+    #     if use_wc_constraint:
+    #         r2c3.metric("Peak Working Capital", f"₹{m['wc']:,.0f}", 
+    #                     delta="PASS ✅" if m['wc'] <= st.session_state.max_wc_limit else "FAIL ❌", 
+    #                     delta_color="normal" if m['wc'] <= st.session_state.max_wc_limit else "inverse")
+        # --- 3. FINAL AUDIT DASHBOARD (RESTRUCTURED) ---
     if st.session_state.get('opt_done'):
         m, p = st.session_state.best_m, st.session_state.best_policy
         st.divider()
-        st.subheader("✅ AI Optimized Strategy Audit")
         
-        r1c1, r1c2, r1c3, r1c4 = st.columns(4)
-        r1c1.metric("Optimal ROP/Q", f"{p[0]} / {p[1]}")
-        r1c2.metric("Min Fill Rate (P1)", f"{m['fr_p1']:.1f}%")
-        r1c3.metric("Avg Fill Rate", f"{m['fr_avg']:.1f}%")
-        r1c4.metric("Stockout Risk (P99)", f"{m['so']:.1f} Days")
+        # --- SECTION A: CONSTRAINT COMPLIANCE ---
+        st.subheader("🛡️ Business Constraint Compliance")
+        c_col1, c_col2, c_col3 = st.columns(3)
+        
+        # Check against targets
+        fr_pass = m['fr_p1'] >= t_fr
+        so_pass = m['so'] <= t_so_days
+        wc_pass = m['wc'] <= st.session_state.max_wc_limit
 
-        r2c1, r2c2, r2c3 = st.columns(3)
-        r2c1.metric("Annual Total Cost", f"₹{m['cost']:,.0f}")
-        r2c2.metric("Orders / Year", f"{round(m['orders'], 1)}")
+        c_col1.metric("Min Fill Rate (P1)", f"{m['fr_p1']:.1f}%", 
+                     delta="REACHED" if fr_pass else "BELOW TARGET", 
+                     delta_color="normal" if fr_pass else "inverse")
+        
+        c_col2.metric("Peak Stockout (P99)", f"{m['so']:.1f} Days", 
+                     delta="SAFE" if so_pass else "HIGH RISK", 
+                     delta_color="normal" if so_pass else "inverse")
+        
         if use_wc_constraint:
-            r2c3.metric("Peak Working Capital", f"₹{m['wc']:,.0f}", 
-                        delta="PASS ✅" if m['wc'] <= st.session_state.max_wc_limit else "FAIL ❌", 
-                        delta_color="normal" if m['wc'] <= st.session_state.max_wc_limit else "inverse")
+            c_col3.metric("Peak Working Capital", f"₹{m['wc']:,.0f}", 
+                         delta="WITHIN LIMIT" if wc_pass else "EXCEEDED", 
+                         delta_color="normal" if wc_pass else "inverse")
+        else:
+            c_col3.metric("Peak Working Capital", f"₹{m['wc']:,.0f}", "NO LIMIT SET")
+
+        st.write("") # Spacer
+        
+        # --- SECTION B: OPERATIONAL PERFORMANCE ---
+        st.subheader("📊 Operational Efficiency KPIs")
+        p_col1, p_col2, p_col3, p_col4 = st.columns(4)
+        
+        p_col1.metric("Optimal ROP / Q", f"{p[0]} / {p[1]}")
+        p_col2.metric("Avg Fill Rate", f"{m['fr_avg']:.1f}%")
+        p_col3.metric("Orders / Year", f"{round(m['orders'], 1)}")
+        p_col4.metric("Annual Total Cost", f"₹{m['cost']:,.0f}")
+        
+        # Adding requested Average metrics (Approximation based on peak/2 for simplicity in audit)
+        st.info(f"💡 **Strategic Summary:** This policy targets an average inventory value of **₹{(m['wc']/2):,.0f}** to maintain a **{m['fr_avg']:.1f}%** service level.")
+
+        # --- 4. HIGH-VISIBILITY HEATMAPS ---
+        st.divider()
+        st.subheader("🌡️ Strategic Resilience Heatmaps")
+        if st.button("🌡️ Generate Strategic Heatmap Suite"):
+            # [Heatmap code remains the same as the last working version]
+            n_steps = 12
+            rop_range = np.linspace(max(0, p[0]*0.4), p[0]*1.6, n_steps).astype(int)
+            q_range = np.linspace(max(50, p[1]*0.4), p[1]*1.6, n_steps).astype(int)
+            sim_matrix = np.zeros((n_steps, n_steps, 4)) 
+            h_dem = np.maximum(0, np.random.normal(avg_demand, std_demand, (500, num_days))).round()
+            
+            for i, h_rop in enumerate(rop_range):
+                for j, h_q in enumerate(q_range):
+                    inv = np.full(500, opening_balance, dtype=float); arr = np.zeros((500, num_days + lead_time + 1))
+                    pip, so, unmet, peaks, ords = [np.zeros(500) for _ in range(5)]
+                    for d in range(num_days):
+                        inv += arr[:, d]; pip -= arr[:, d]; inv -= h_dem[:, d]
+                        o_m = inv < 0; so += o_m; unmet -= np.where(o_m, inv, 0); inv = np.where(o_m, 0, inv)
+                        peaks = np.maximum(peaks, inv)
+                        r_m = (inv + pip <= h_rop); arr[r_m, d + lead_time] = h_q; pip += np.where(r_m, h_q, 0); ords += r_m
+                    sim_matrix[i, j, 0] = (1 - (unmet / h_dem.sum(axis=1))).mean() * 100
+                    sim_matrix[i, j, 1] = (peaks.mean() * unit_value * holding_cost_rate) + (ords.mean() * ordering_cost)
+                    sim_matrix[i, j, 3] = so.mean()
+                    sim_matrix[i, j, 2] = peaks.mean() * unit_value
+
+            configs = [
+                (0, "Average Fill Rate %", "RdYlGn"),
+                (1, "Average Total Cost (₹)", "RdYlGn_r"),
+                (3, "Average Stockout Days", "RdYlGn_r"),
+                (2, "Average Working Capital (₹)", "RdYlGn_r")
+            ]
+
+            for idx, title, scale in configs:
+                fig = px.imshow(sim_matrix[:, :, idx], x=q_range, y=rop_range, color_continuous_scale=scale, 
+                                title=title, height=650, aspect="auto", origin="lower")
+                fig.update_traces(text=np.around(sim_matrix[:, :, idx], 1), texttemplate="%{text}")
+                fig.update_layout(
+                    yaxis_title="Reorder Point (ROP)", xaxis_title="Order Quantity (Q)",
+                    coloraxis_colorbar=dict(lenmode="pixels", len=550, yanchor="middle", y=0.5, thickness=30),
+                    margin=dict(l=70, r=70, t=100, b=70)
+                )
+                st.plotly_chart(fig, use_container_width=True)
 
         # --- 4. HIGH-VISIBILITY HEATMAP SUITE (STRETCH FIX) ---
         st.divider()

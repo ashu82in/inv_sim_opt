@@ -817,10 +817,9 @@ with tab2:
 with tab3:
     st.header("🧬 Adaptive AI Optimizer")
     
-    # --- 1. PRE-CALCULATIONS & PERSISTENT DATA ---
-    # Define these at the very start of the tab to prevent NameErrors later
+    # --- 1. PERSISTENT CONSTANTS ---
+    # Defined at tab-level to ensure they exist for all buttons/re-runs
     daily_h_unit_val = unit_value * holding_cost_rate / 365
-    n_opt_sim_val = st.session_state.get('n_opt_sim', 1000)
 
     st.subheader("Business Guardrails")
     col_c1, col_c2 = st.columns(2)
@@ -846,11 +845,11 @@ with tab3:
         progress_bar = st.progress(0)
         status_text = st.empty()
         
-        # Local demand matrix generation
-        demand_matrix = np.maximum(0, np.random.normal(avg_demand, std_demand, (st.session_state.n_opt_sim, num_days))).round()
+        n_sim = st.session_state.n_opt_sim
+        demand_matrix = np.maximum(0, np.random.normal(avg_demand, std_demand, (n_sim, num_days))).round()
         total_d_scenario = demand_matrix.sum(axis=1)
         
-        # Search space setup
+        # Define Search Space
         avg_ltd = avg_demand * lead_time
         sigma_ltd = std_demand * np.sqrt(lead_time)
         rop_f, rop_c = int(max(0, avg_ltd - (2.5*sigma_ltd))), int(avg_ltd + (8*sigma_ltd))
@@ -861,9 +860,9 @@ with tab3:
         for gen in range(max_gen):
             fitness_scores, gen_metrics = [], []
             for r_t, q_t in pop:
-                inv = np.full(st.session_state.n_opt_sim, opening_balance, dtype=float)
-                arrivals = np.zeros((st.session_state.n_opt_sim, num_days + lead_time + 1))
-                pipeline_total, so, unmet, h_costs, orders, peaks = [np.zeros(st.session_state.n_opt_sim) for _ in range(6)]
+                inv = np.full(n_sim, opening_balance, dtype=float)
+                arrivals = np.zeros((n_sim, num_days + lead_time + 1))
+                pipeline_total, so, unmet, h_costs, orders, peaks = [np.zeros(n_sim) for _ in range(6)]
 
                 for d in range(num_days):
                     inv += arrivals[:, d]; pipeline_total -= arrivals[:, d]; inv -= demand_matrix[:, d]
@@ -896,7 +895,6 @@ with tab3:
             progress_bar.progress((gen + 1) / max_gen)
             if gens_without_imp >= patience: break
             
-            # Evolution logic
             ranked_pop = [pop[i] for i in np.argsort(fitness_scores)]
             new_pop = ranked_pop[:4] 
             while len(new_pop) < num_pop:
@@ -917,7 +915,7 @@ with tab3:
         st.subheader("✅ AI Optimized Strategy Audit")
         
         r1c1, r1c2, r1c3, r1c4 = st.columns(4)
-        r1c1.metric("Optimal Strategy (ROP/Q)", f"{p[0]} / {p[1]}")
+        r1c1.metric("Optimal ROP/Q", f"{p[0]} / {p[1]}")
         r1c2.metric("Min Fill Rate (P1)", f"{m['fr_p1']:.1f}%")
         r1c3.metric("Avg Fill Rate", f"{m['fr_avg']:.1f}%")
         r1c4.metric("Stockout Risk (P99)", f"{m['so']:.1f} Days")
@@ -930,7 +928,30 @@ with tab3:
                         delta="PASS ✅" if m['wc'] <= st.session_state.max_wc_limit else "FAIL ❌", 
                         delta_color="normal" if m['wc'] <= st.session_state.max_wc_limit else "inverse")
 
-       # --- 4. HIGH-VISIBILITY STRATEGIC HEATMAPS (FIXED) ---
+        # --- 4. HIGH-VISIBILITY HEATMAP SUITE (STRETCH FIX) ---
+        st.divider()
+        st.subheader("🌡️ Strategic Resilience Heatmaps")
+        if st.button("🌡️ Generate Strategic Heatmap Suite"):
+            n_steps = 12
+            rop_range = np.linspace(max(0, p[0]*0.4), p[0]*1.6, n_steps).astype(int)
+            q_range = np.linspace(max(50, p[1]*0.4), p[1]*1.6, n_steps).astype(int)
+            sim_matrix = np.zeros((n_steps, n_steps, 4)) 
+            h_dem = np.maximum(0, np.random.normal(avg_demand, std_demand, (500, num_days))).round()
+            
+            for i, h_rop in enumerate(rop_range):
+                for j, h_q in enumerate(q_range):
+                    inv = np.full(500, opening_balance, dtype=float); arr = np.zeros((500, num_days + lead_time + 1))
+                    pip, so, unmet, peaks, ords = [np.zeros(500) for _ in range(5)]
+                    for d in range(num_days):
+                        inv += arr[:, d]; pip -= arr[:, d]; inv -= h_dem[:, d]
+                        o_m = inv < 0; so += o_m; unmet -= np.where(o_m, inv, 0); inv = np.where(o_m, 0, inv)
+                        peaks = np.maximum(peaks, inv)
+                        r_m = (inv + pip <= h_rop); arr[r_m, d + lead_time] = h_q; pip += np.where(r_m, h_q, 0); ords += r_m
+                    sim_matrix[i, j, 0] = (1 - (unmet / h_dem.sum(axis=1))).mean() * 100
+                    sim_matrix[i, j, 1] = (peaks.mean() * unit_value * holding_cost_rate) + (ords.mean() * ordering_cost)
+                    sim_matrix[i, j, 3] = so.mean()
+                    sim_matrix[i, j, 2] = peaks.mean() * unit_value
+
             configs = [
                 (0, "Average Fill Rate %", "RdYlGn"),
                 (1, "Average Total Cost (₹)", "RdYlGn_r"),
@@ -939,42 +960,19 @@ with tab3:
             ]
 
             for idx, title, scale in configs:
-                # 1. Create the figure without axis anchoring
-                fig = px.imshow(
-                    sim_matrix[:, :, idx], 
-                    x=q_range, 
-                    y=rop_range, 
-                    color_continuous_scale=scale, 
-                    title=title, 
-                    height=600, 
-                    aspect="auto", # IMPORTANT: This lets the cells stretch to fill the 600px height
-                    origin="lower" # Puts lower ROP at the bottom
-                )
+                # IMPORTANT: aspect="auto" and fixed height solve the thin row issue
+                fig = px.imshow(sim_matrix[:, :, idx], x=q_range, y=rop_range, color_continuous_scale=scale, 
+                                title=title, height=650, aspect="auto", origin="lower")
                 
-                # 2. Add text annotations so data is readable even at a glance
-                fig.update_traces(
-                    text=np.around(sim_matrix[:, :, idx], 1), 
-                    texttemplate="%{text}",
-                    hoverongaps=False
-                )
+                fig.update_traces(text=np.around(sim_matrix[:, :, idx], 1), texttemplate="%{text}")
                 
-                # 3. Clean up the layout
                 fig.update_layout(
-                    # This ensures the ROP axis label doesn't overlap
-                    yaxis=dict(title="Reorder Point (ROP)", tickmode='linear'),
-                    xaxis=dict(title="Order Quantity (Q)"),
-                    # Align color bar perfectly
-                    coloraxis_colorbar=dict(
-                        lenmode="fraction", 
-                        len=1.0, 
-                        thickness=30,
-                        yanchor="middle", 
-                        y=0.5
-                    ),
-                    margin=dict(l=80, r=80, t=100, b=80),
-                    title_font_size=22
+                    xaxis_title="Order Quantity (Q)",
+                    yaxis_title="Reorder Point (ROP)",
+                    coloraxis_colorbar=dict(lenmode="pixels", len=550, yanchor="middle", y=0.5, thickness=30),
+                    margin=dict(l=70, r=70, t=100, b=70),
+                    title_font_size=24
                 )
-
                 st.plotly_chart(fig, use_container_width=True)
 
         # --- 5. INTERACTIVE SANDBOX ---

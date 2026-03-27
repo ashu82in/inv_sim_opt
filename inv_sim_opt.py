@@ -957,7 +957,7 @@ with tab3:
 
             # Individual rows for maximum visibility
             st.plotly_chart(px.imshow(sim_matrix[:,:,0], x=q_range, y=rop_range, color_continuous_scale='RdYlGn', 
-                                     title="Average Fill Rate %", height=600), use_container_width=True)
+                                     title="Average Fill Rate %", height=1000), use_container_width=True)
             st.plotly_chart(px.imshow(sim_matrix[:,:,1], x=q_range, y=rop_range, color_continuous_scale='RdYlGn_r', 
                                      title="Average Total Cost (₹)", height=600), use_container_width=True)
             st.plotly_chart(px.imshow(sim_matrix[:,:,3], x=q_range, y=rop_range, color_continuous_scale='RdYlGn_r', 

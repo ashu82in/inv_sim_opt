@@ -817,7 +817,8 @@ with tab2:
 with tab3:
     st.header("🧬 Adaptive AI Optimizer")
     
-    # --- 1. PERSISTENT CONSTANTS & GUARDRAILS ---
+    # --- 1. PERSISTENT CONSTANTS ---
+    # Define these globally within the tab to prevent NameErrors during reruns
     daily_h_unit_val = unit_value * holding_cost_rate / 365
 
     st.subheader("Business Guardrails")
@@ -839,7 +840,7 @@ with tab3:
         max_gen = st.slider("Max Generations", 20, 300, 100)
         patience = st.number_input("Patience (Stable Generations)", value=10)
 
-    # --- 2. THE EVOLUTIONARY ENGINE ---
+    # --- 2. THE ENGINE ---
     if st.button("🚀 Run Adaptive Optimization"):
         progress_bar = st.progress(0)
         status_text = st.empty()
@@ -866,7 +867,7 @@ with tab3:
                     inv += arrivals[:, d]; pipeline_total -= arrivals[:, d]; inv -= demand_matrix[:, d]
                     o_m = inv < 0; so += o_m; unmet -= np.where(o_m, inv, 0); inv = np.where(o_m, 0, inv)
                     peaks = np.maximum(peaks, inv); h_costs += (inv * daily_h_unit_val)
-                    daily_sum_inv += inv # For average working capital calculation
+                    daily_sum_inv += inv
                     r_m = (inv + pipeline_total <= r_t); arrivals[r_m, d + lead_time] = q_t 
                     pipeline_total += np.where(r_m, q_t, 0); orders += r_m
 
@@ -892,7 +893,7 @@ with tab3:
                 best_f, gens_without_imp = fitness_scores[best_idx], 0
             else: gens_without_imp += 1
             
-            status_text.text(f"Gen {gen+1}: Finding Balance... (Stability {gens_without_imp}/{patience})")
+            status_text.text(f"Gen {gen+1}: Stability {gens_without_imp}/{patience}")
             progress_bar.progress((gen + 1) / max_gen)
             if gens_without_imp >= patience: break
             
@@ -914,22 +915,18 @@ with tab3:
         m, p = st.session_state.best_m, st.session_state.best_policy
         st.divider()
         
-        # SECTION A: CONSTRAINT COMPLIANCE (METRICS VS TARGETS)
         st.subheader("🛡️ Business Constraint Compliance")
         c_col1, c_col2, c_col3 = st.columns(3)
         c_col1.metric("Min Fill Rate (P1)", f"{m['fr_p1']:.1f}%", delta="PASS" if m['fr_p1'] >= t_fr else "FAIL", delta_color="normal" if m['fr_p1'] >= t_fr else "inverse")
         c_col2.metric("Peak Stockout (P99)", f"{m['so_peak']:.1f} Days", delta="SAFE" if m['so_peak'] <= t_so_days else "HIGH RISK", delta_color="normal" if m['so_peak'] <= t_so_days else "inverse")
         c_col3.metric("Peak Working Capital", f"₹{m['wc_peak']:,.0f}", delta="WITHIN LIMIT" if m['wc_peak'] <= st.session_state.max_wc_limit else "EXCEEDED", delta_color="normal" if m['wc_peak'] <= st.session_state.max_wc_limit else "inverse")
 
-        # SECTION B: OPERATIONAL PERFORMANCE (AVERAGES)
         st.subheader("📊 Operational Efficiency KPIs")
         p_col1, p_col2, p_col3, p_col4 = st.columns(4)
         p_col1.metric("Optimal Strategy", f"{p[0]} / {p[1]}")
         p_col2.metric("Avg Fill Rate", f"{m['fr_avg']:.1f}%")
         p_col3.metric("Avg Stockout", f"{m['so_avg']:.1f} Days")
         p_col4.metric("Avg Working Capital", f"₹{m['wc_avg']:,.0f}")
-
-        st.info(f"💰 **Financial Summary:** This policy incurs an Annual Cost of **₹{m['cost']:,.0f}** with roughly **{round(m['orders'], 1)}** orders per year.")
 
         # --- 4. HIGH-VISIBILITY HEATMAPS ---
         st.divider()
@@ -955,17 +952,11 @@ with tab3:
                     sim_matrix[i, j, 3] = so.mean()
                     sim_matrix[i, j, 2] = peaks.mean() * unit_value
 
-            configs = [
-                (0, "Average Fill Rate %", "RdYlGn"),
-                (1, "Average Total Cost (₹)", "RdYlGn_r"),
-                (3, "Average Stockout Days", "RdYlGn_r"),
-                (2, "Average Working Capital (₹)", "RdYlGn_r")
-            ]
-
+            configs = [(0, "Avg Fill Rate %", "RdYlGn"), (1, "Avg Total Cost (₹)", "RdYlGn_r"), (3, "Avg Stockout Days", "RdYlGn_r"), (2, "Avg Working Capital (₹)", "RdYlGn_r")]
             for idx, title, scale in configs:
                 fig = px.imshow(sim_matrix[:, :, idx], x=q_range, y=rop_range, color_continuous_scale=scale, title=title, height=700, aspect="auto", origin="lower")
                 fig.update_traces(text=np.around(sim_matrix[:, :, idx], 1), texttemplate="%{text}")
-                fig.update_layout(yaxis_title="Reorder Point (ROP)", xaxis_title="Order Quantity (Q)", coloraxis_colorbar=dict(lenmode="pixels", len=600, yanchor="middle", y=0.5, thickness=30), margin=dict(l=70, r=70, t=100, b=70))
+                fig.update_layout(yaxis_title="ROP", xaxis_title="Order Qty", coloraxis_colorbar=dict(lenmode="pixels", len=550, yanchor="middle", y=0.5, thickness=30), margin=dict(l=70, r=70, t=100, b=70))
                 st.plotly_chart(fig, use_container_width=True)
 
         # --- 5. INTERACTIVE SANDBOX ---
@@ -973,8 +964,8 @@ with tab3:
         st.subheader("🎮 Interactive Strategy Sandbox")
         sc1, sc2 = st.columns(2)
         u_rop = sc1.number_input("Test ROP", value=int(p[0]), key="u_rop")
-        u_q = sc2.number_input("Test Order Qty", value=int(p[1]), key="u_q")
-        if st.button("🧮 Run Sandbox Comparison"):
+        u_q = sc2.number_input("Test Qty", value=int(p[1]), key="u_q")
+        if st.button("🧮 Compare Strategies"):
             n_s = 2000
             s_dem = np.maximum(0, np.random.normal(avg_demand, std_demand, (n_s, num_days))).round()
             s_inv = np.full(n_s, opening_balance, dtype=float); s_arr = np.zeros((n_s, num_days + lead_time + 1))
@@ -984,16 +975,13 @@ with tab3:
                 o_m = s_inv < 0; s_so += o_m; s_unmet -= np.where(o_m, s_inv, 0); s_inv = np.where(o_m, 0, s_inv)
                 s_peaks = np.maximum(s_peaks, s_inv)
                 r_m = (s_inv + s_pip <= u_rop); s_arr[r_m, d + lead_time] = u_q; s_pip += np.where(r_m, u_q, 0); s_ords += r_m
-
-            u_fr_avg = (1 - (s_unmet / s_dem.sum(axis=1))).mean() * 100
-            u_wc = np.percentile(s_peaks, 99) * unit_value
-            u_cost = (s_peaks.mean() * unit_value * holding_cost_rate) + (s_ords.mean() * ordering_cost)
             
+            u_metrics = {'fr': (1-(s_unmet/s_dem.sum(axis=1))).mean()*100, 'wc': np.percentile(s_peaks, 99)*unit_value, 'cost': (s_peaks.mean()*unit_value*holding_cost_rate)+(s_ords.mean()*ordering_cost)}
             st.table(pd.DataFrame({
-                "KPI": ["Policy (ROP/Q)", "Avg Fill Rate", "Peak Working Capital", "Annual Total Cost"],
+                "KPI": ["Strategy (ROP/Q)", "Avg Fill Rate", "Peak Working Capital", "Annual Total Cost"],
                 "AI Optimized": [f"{p[0]} / {p[1]}", f"{m['fr_avg']:.2f}%", f"₹{m['wc_peak']:,.0f}", f"₹{m['cost']:,.0f}"],
-                "Your Custom": [f"{u_rop} / {u_q}", f"{u_fr_avg:.2f}%", f"₹{u_wc:,.0f}", f"₹{u_cost:,.0f}"],
-                "Delta": ["-", f"{u_fr_avg - m['fr_avg']:.2f}%", f"₹{u_wc - m['wc_peak']:,.0f}", f"₹{u_cost - m['cost']:,.0f}"]
+                "Your Custom": [f"{u_rop} / {u_q}", f"{u_metrics['fr']:.2f}%", f"₹{u_metrics['wc']:,.0f}", f"₹{u_metrics['cost']:,.0f}"],
+                "Delta": ["-", f"{u_metrics['fr'] - m['fr_avg']:.2f}%", f"₹{u_metrics['wc'] - m['wc_peak']:,.0f}", f"₹{u_metrics['cost'] - m['cost']:,.0f}"]
             }))
         # [Sandbox code from previous step]
 # with tab3:

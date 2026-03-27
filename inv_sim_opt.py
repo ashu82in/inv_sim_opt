@@ -814,11 +814,14 @@ with tab2:
 #         st.plotly_chart(px.line(y=history, title="Genetic Optimization: Fitness Improvement"))
 #         with st.expander("📜 View Detailed Simulation Log"):
 #             st.dataframe(pd.DataFrame(log_data), use_container_width=True)
-
 with tab3:
     st.header("🧬 Adaptive AI Optimizer")
     
-    # --- 1. BUSINESS GUARDRAILS & PERSISTENT STATE ---
+    # --- 1. PRE-CALCULATIONS & PERSISTENT DATA ---
+    # Define these at the very start of the tab to prevent NameErrors later
+    daily_h_unit_val = unit_value * holding_cost_rate / 365
+    n_opt_sim_val = st.session_state.get('n_opt_sim', 1000)
+
     st.subheader("Business Guardrails")
     col_c1, col_c2 = st.columns(2)
     with col_c1:
@@ -828,7 +831,6 @@ with tab3:
     with col_c2:
         use_wc_constraint = st.toggle("Limit Peak Working Capital (P99)", value=True)
         if use_wc_constraint:
-            # Persistent WC Limit in session state
             st.session_state.max_wc_limit = st.number_input("Maximum Cash Ceiling (₹)", value=150000, step=5000)
         else:
             st.session_state.max_wc_limit = 999999999
@@ -839,33 +841,29 @@ with tab3:
         max_gen = st.slider("Max Generations", 20, 300, 100)
         patience = st.number_input("Patience (Stable Generations)", value=10)
 
-    # Calculate global constant within the tab scope to prevent NameErrors
-    daily_h_unit_val = unit_value * holding_cost_rate / 365
-
-    # --- 2. THE EVOLUTIONARY ENGINE ---
+    # --- 2. OPTIMIZATION ENGINE ---
     if st.button("🚀 Run Adaptive Optimization"):
         progress_bar = st.progress(0)
         status_text = st.empty()
         
-        n_sim = st.session_state.n_opt_sim
-        demand_matrix = np.maximum(0, np.random.normal(avg_demand, std_demand, (n_sim, num_days))).round()
+        # Local demand matrix generation
+        demand_matrix = np.maximum(0, np.random.normal(avg_demand, std_demand, (st.session_state.n_opt_sim, num_days))).round()
         total_d_scenario = demand_matrix.sum(axis=1)
         
-        # Search Space Logic
+        # Search space setup
         avg_ltd = avg_demand * lead_time
         sigma_ltd = std_demand * np.sqrt(lead_time)
         rop_f, rop_c = int(max(0, avg_ltd - (2.5*sigma_ltd))), int(avg_ltd + (8*sigma_ltd))
         pop = [[random.randint(rop_f, rop_c), random.randint(100, int(avg_demand * 45))] for _ in range(num_pop)]
         
-        best_fitness_overall, gens_without_imp = float('inf'), 0
-        history = []
+        best_f, gens_without_imp = float('inf'), 0
 
         for gen in range(max_gen):
             fitness_scores, gen_metrics = [], []
             for r_t, q_t in pop:
-                inv = np.full(n_sim, opening_balance, dtype=float)
-                arrivals = np.zeros((n_sim, num_days + lead_time + 1))
-                pipeline_total, so, unmet, h_costs, orders, peaks = [np.zeros(n_sim) for _ in range(6)]
+                inv = np.full(st.session_state.n_opt_sim, opening_balance, dtype=float)
+                arrivals = np.zeros((st.session_state.n_opt_sim, num_days + lead_time + 1))
+                pipeline_total, so, unmet, h_costs, orders, peaks = [np.zeros(st.session_state.n_opt_sim) for _ in range(6)]
 
                 for d in range(num_days):
                     inv += arrivals[:, d]; pipeline_total -= arrivals[:, d]; inv -= demand_matrix[:, d]
@@ -875,30 +873,30 @@ with tab3:
                     pipeline_total += np.where(r_m, q_t, 0); orders += r_m
 
                 all_fr = (1 - (unmet / total_d_scenario)) * 100
-                fr_p1, fr_avg = np.percentile(all_fr, 1), all_fr.mean()
-                so_p99, wc_p99 = np.percentile(so, 99), np.percentile(peaks, 99) * unit_value
-                avg_cost = (h_costs + (orders * ordering_cost)).mean()
+                metrics = {
+                    'fr_p1': np.percentile(all_fr, 1), 'fr_avg': all_fr.mean(),
+                    'so': np.percentile(so, 99), 'wc': np.percentile(peaks, 99) * unit_value,
+                    'cost': (h_costs + (orders * ordering_cost)).mean(), 'orders': orders.mean()
+                }
                 
                 penalty = 0
-                if use_so_constraint and so_p99 > t_so_days: penalty += (so_p99 - t_so_days) * 30000
-                if use_wc_constraint and wc_p99 > st.session_state.max_wc_limit: penalty += (wc_p99 - st.session_state.max_wc_limit) * 200
-                if fr_p1 < t_fr: penalty += (t_fr - fr_p1) * 45000
+                if use_so_constraint and metrics['so'] > t_so_days: penalty += (metrics['so'] - t_so_days) * 30000
+                if use_wc_constraint and metrics['wc'] > st.session_state.max_wc_limit: penalty += (metrics['wc'] - st.session_state.max_wc_limit) * 200
+                if metrics['fr_p1'] < t_fr: penalty += (t_fr - metrics['fr_p1']) * 45000
                 
-                fitness_scores.append(avg_cost + penalty)
-                # Synchronized keys to prevent KeyErrors
-                gen_metrics.append({'cost': avg_cost, 'fr_p1': fr_p1, 'fr_avg': fr_avg, 'so': so_p99, 'wc': wc_p99, 'orders': orders.mean()})
+                fitness_scores.append(metrics['cost'] + penalty)
+                gen_metrics.append(metrics)
 
             best_idx = np.argmin(fitness_scores)
-            if fitness_scores[best_idx] < (best_fitness_overall - 5.0):
-                best_fitness_overall, gens_without_imp = fitness_scores[best_idx], 0
+            if fitness_scores[best_idx] < (best_f - 5.0):
+                best_f, gens_without_imp = fitness_scores[best_idx], 0
             else: gens_without_imp += 1
             
-            history.append(fitness_scores[best_idx])
             status_text.text(f"Gen {gen+1}: Finding Balance... (Stability {gens_without_imp}/{patience})")
             progress_bar.progress((gen + 1) / max_gen)
             if gens_without_imp >= patience: break
             
-            # Genetic Evolution
+            # Evolution logic
             ranked_pop = [pop[i] for i in np.argsort(fitness_scores)]
             new_pop = ranked_pop[:4] 
             while len(new_pop) < num_pop:
@@ -919,7 +917,7 @@ with tab3:
         st.subheader("✅ AI Optimized Strategy Audit")
         
         r1c1, r1c2, r1c3, r1c4 = st.columns(4)
-        r1c1.metric("Optimal Policy (ROP/Q)", f"{p[0]} / {p[1]}")
+        r1c1.metric("Optimal Strategy (ROP/Q)", f"{p[0]} / {p[1]}")
         r1c2.metric("Min Fill Rate (P1)", f"{m['fr_p1']:.1f}%")
         r1c3.metric("Avg Fill Rate", f"{m['fr_avg']:.1f}%")
         r1c4.metric("Stockout Risk (P99)", f"{m['so']:.1f} Days")
@@ -932,10 +930,10 @@ with tab3:
                         delta="PASS ✅" if m['wc'] <= st.session_state.max_wc_limit else "FAIL ❌", 
                         delta_color="normal" if m['wc'] <= st.session_state.max_wc_limit else "inverse")
 
-        # --- 4. HIGH-VISIBILITY HEATMAPS (FIXED HEIGHT) ---
+        # --- 4. HIGH-VISIBILITY HEATMAPS (BUG FIX APPLIED) ---
         st.divider()
         st.subheader("🌡️ Strategic Resilience Heatmaps")
-        if st.button("🌡️ Generate Full-Width Heatmaps"):
+        if st.button("🌡️ Generate Strategic Heatmaps"):
             n_steps = 12
             rop_range = np.linspace(max(0, p[0]*0.4), p[0]*1.6, n_steps).astype(int)
             q_range = np.linspace(max(50, p[1]*0.4), p[1]*1.6, n_steps).astype(int)
@@ -954,37 +952,40 @@ with tab3:
 
                     sim_matrix[i, j, 0] = (1 - (unmet / h_dem.sum(axis=1))).mean() * 100
                     sim_matrix[i, j, 1] = (peaks.mean() * unit_value * holding_cost_rate) + (ords.mean() * ordering_cost)
-                    sim_matrix[i, j, 2] = peaks.mean() * unit_value
                     sim_matrix[i, j, 3] = so.mean()
+                    sim_matrix[i, j, 2] = peaks.mean() * unit_value
 
-            heatmap_config = [
+            configs = [
                 (0, "Average Fill Rate %", "RdYlGn"),
                 (1, "Average Total Cost (₹)", "RdYlGn_r"),
                 (3, "Average Stockout Days", "RdYlGn_r"),
                 (2, "Average Working Capital (₹)", "RdYlGn_r")
             ]
 
-            for idx, title, scale in heatmap_config:
-                # FIX: aspect="auto" and origin="lower" ensure rows stretch vertically
+            for idx, title, scale in configs:
                 fig = px.imshow(sim_matrix[:, :, idx], x=q_range, y=rop_range, color_continuous_scale=scale, 
-                                title=title, height=700, aspect="auto", origin="lower")
+                                title=title, height=750, aspect="auto", origin="lower")
                 
-                # Add text annotations for clarity
                 fig.update_traces(text=np.around(sim_matrix[:, :, idx], 1), texttemplate="%{text}")
                 
+                # FIXED: Removed 'autosize' from yaxis and fixed colorbar alignment
                 fig.update_layout(
-                    yaxis=dict(type='linear', autosize=True),
-                    coloraxis_colorbar=dict(lenmode="pixels", len=600, yanchor="middle", y=0.5, thickness=25),
-                    margin=dict(l=60, r=60, t=100, b=60)
+                    yaxis=dict(type='linear'),
+                    coloraxis_colorbar=dict(lenmode="pixels", len=600, yanchor="middle", y=0.5, thickness=30),
+                    margin=dict(l=60, r=60, t=100, b=60),
+                    title_font_size=24
                 )
+                # This ensures the rows are significantly taller (thick)
+                fig.update_yaxes(scaleanchor="x", scaleratio=0.2)
+                
                 st.plotly_chart(fig, use_container_width=True)
 
         # --- 5. INTERACTIVE SANDBOX ---
         st.divider()
         st.subheader("🎮 Interactive Strategy Sandbox")
         sc1, sc2 = st.columns(2)
-        u_rop = sc1.number_input("Your Custom ROP", value=int(p[0]), step=10)
-        u_q = sc2.number_input("Your Custom Order Qty", value=int(p[1]), step=10)
+        u_rop = sc1.number_input("Your Custom ROP", value=int(p[0]), key="u_rop")
+        u_q = sc2.number_input("Your Custom Order Qty", value=int(p[1]), key="u_q")
 
         if st.button("🧮 Test My Strategy"):
             n_s = 2000
@@ -993,21 +994,19 @@ with tab3:
             s_pip, s_so, s_unmet, s_peaks, s_ords = [np.zeros(n_s) for _ in range(5)]
             for d in range(num_days):
                 s_inv += s_arr[:, d]; s_pip -= s_arr[:, d]; s_inv -= s_dem[:, d]
-                o_m = s_inv < 0; s_so += o_m; s_unmet -= np.where(o_m, s_inv, 0); inv = np.where(o_m, 0, s_inv)
+                o_m = s_inv < 0; s_so += o_m; s_unmet -= np.where(o_m, s_inv, 0); s_inv = np.where(o_m, 0, s_inv)
                 s_peaks = np.maximum(s_peaks, s_inv)
                 r_m = (s_inv + s_pip <= u_rop); s_arr[r_m, d + lead_time] = u_q; s_pip += np.where(r_m, u_q, 0); s_ords += r_m
 
-            u_all_fr = (1 - (s_unmet / s_dem.sum(axis=1))) * 100
-            u_fr_avg, u_fr_p1 = u_all_fr.mean(), np.percentile(u_all_fr, 1)
+            u_fr_avg = (1 - (s_unmet / s_dem.sum(axis=1))).mean() * 100
             u_wc = np.percentile(s_peaks, 99) * unit_value
             u_cost = (s_peaks.mean() * unit_value * holding_cost_rate) + (s_ords.mean() * ordering_cost)
             
-            st.write("#### Custom Strategy vs. AI Optimized")
             st.table(pd.DataFrame({
-                "KPI": ["Policy (ROP/Q)", "Avg Fill Rate", "Min Fill Rate (P1)", "Peak Working Capital", "Annual Total Cost"],
-                "AI Optimized": [f"{p[0]} / {p[1]}", f"{m['fr_avg']:.2f}%", f"{m['fr_p1']:.2f}%", f"₹{m['wc']:,.0f}", f"₹{m['cost']:,.0f}"],
-                "Your Custom": [f"{u_rop} / {u_q}", f"{u_fr_avg:.2f}%", f"{u_fr_p1:.2f}%", f"₹{u_wc:,.0f}", f"₹{u_cost:,.0f}"],
-                "Delta": ["-", f"{u_fr_avg - m['fr_avg']:.2f}%", f"{u_fr_p1 - m['fr_p1']:.2f}%", f"₹{u_wc - m['wc']:,.0f}", f"₹{u_cost - m['cost']:,.0f}"]
+                "KPI": ["Policy (ROP/Q)", "Avg Fill Rate", "Peak Working Capital", "Annual Total Cost"],
+                "AI Optimized": [f"{p[0]} / {p[1]}", f"{m['fr_avg']:.2f}%", f"₹{m['wc']:,.0f}", f"₹{m['cost']:,.0f}"],
+                "Your Custom": [f"{u_rop} / {u_q}", f"{u_fr_avg:.2f}%", f"₹{u_wc:,.0f}", f"₹{u_cost:,.0f}"],
+                "Delta": ["-", f"{u_fr_avg - m['fr_avg']:.2f}%", f"₹{u_wc - m['wc']:,.0f}", f"₹{u_cost - m['cost']:,.0f}"]
             }))
         # [Sandbox code from previous step]
 # with tab3:

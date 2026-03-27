@@ -827,7 +827,6 @@ with tab3:
         t_fr = st.slider("Min. Acceptable Fill Rate (P1) %", 80.0, 100.0, 95.0)
     with col_c2:
         use_wc_constraint = st.toggle("Limit Peak Working Capital (P99)", value=True)
-        # Store this in session state immediately to prevent NameErrors later
         max_wc_input = st.number_input("Maximum Cash Ceiling (₹)", value=150000, step=5000)
         st.session_state.max_wc_limit = max_wc_input
 
@@ -841,25 +840,21 @@ with tab3:
     if st.button("🚀 Run Adaptive Optimization"):
         progress_bar = st.progress(0)
         status_text = st.empty()
-        
-        # Pre-calculate Constants
         daily_h_unit = unit_value * holding_cost_rate / 365
         demand_matrix = np.maximum(0, np.random.normal(avg_demand, std_demand, (n_opt_sim, num_days))).round()
         total_d_scenario = demand_matrix.sum(axis=1)
         
-        # Search Space
         avg_ltd = avg_demand * lead_time
         sigma_ltd = std_demand * np.sqrt(lead_time)
         rop_f, rop_c = int(max(0, avg_ltd - (2.5*sigma_ltd))), int(avg_ltd + (8*sigma_ltd))
-        
         pop = [[random.randint(rop_f, rop_c), random.randint(100, int(avg_demand * 45))] for _ in range(num_pop)]
-        history, log_data = [], []
+        
+        history = []
         best_fitness_overall, gens_without_imp = float('inf'), 0
 
         for gen in range(max_gen):
             fitness_scores, gen_metrics = [], []
             for r_t, q_t in pop:
-                # --- VECTORIZED CORE ---
                 inv = np.full(n_opt_sim, opening_balance, dtype=float)
                 arrivals = np.zeros((n_opt_sim, num_days + lead_time + 1))
                 pipeline_total = np.zeros(n_opt_sim)
@@ -869,26 +864,23 @@ with tab3:
                     inv += arrivals[:, d]; pipeline_total -= arrivals[:, d]
                     inv -= demand_matrix[:, d]
                     o_m = inv < 0; so += o_m; unmet -= np.where(o_m, inv, 0); inv = np.where(o_m, 0, inv)
-                    peaks = np.maximum(peaks, inv) # PEAK WORKING CAPITAL TRACKER
-                    h_costs += (inv * daily_h_unit)
+                    peaks = np.maximum(peaks, inv); h_costs += (inv * daily_h_unit)
                     r_m = (inv + pipeline_total <= r_t)
                     arrivals[r_m, d + lead_time] = q_t 
                     pipeline_total += np.where(r_m, q_t, 0); orders += r_m
 
-                # Calculate P99 and P1 Metrics
-                fr_p1 = np.percentile((1 - (unmet / total_d_scenario)) * 100, 1)
-                so_p99 = np.percentile(so, 99)
-                wc_p99 = np.percentile(peaks, 99) * unit_value
+                all_fr = (1 - (unmet / total_d_scenario)) * 100
+                fr_p1, fr_avg = np.percentile(all_fr, 1), all_fr.mean()
+                so_p99, wc_p99 = np.percentile(so, 99), np.percentile(peaks, 99) * unit_value
                 avg_cost = (h_costs + (orders * ordering_cost)).mean()
                 
-                # Penalty Engine
                 penalty = 0
                 if use_so_constraint and so_p99 > t_so_days: penalty += (so_p99 - t_so_days) * 30000
                 if use_wc_constraint and wc_p99 > st.session_state.max_wc_limit: penalty += (wc_p99 - st.session_state.max_wc_limit) * 200
                 if fr_p1 < t_fr: penalty += (t_fr - fr_p1) * 45000
                 
                 fitness_scores.append(avg_cost + penalty)
-                gen_metrics.append({'cost': avg_cost, 'fr': fr_p1, 'so': so_p99, 'wc': wc_p99, 'orders': orders.mean()})
+                gen_metrics.append({'cost': avg_cost, 'fr_p1': fr_p1, 'fr_avg': fr_avg, 'so': so_p99, 'wc': wc_p99, 'orders': orders.mean()})
 
             best_idx = np.argmin(fitness_scores)
             if fitness_scores[best_idx] < (best_fitness_overall - 5.0):
@@ -896,12 +888,10 @@ with tab3:
             else: gens_without_imp += 1
             
             history.append(fitness_scores[best_idx])
-            log_data.append({"Gen": gen + 1, "ROP": pop[best_idx][0], "Qty": pop[best_idx][1], "Cost": round(gen_metrics[best_idx]['cost'], 0)})
             status_text.text(f"Gen {gen+1}: Finding Balance... (Patience {gens_without_imp}/{patience})")
             progress_bar.progress((gen + 1) / max_gen)
             if gens_without_imp >= patience: break
             
-            # Evolution
             ranked_pop = [pop[i] for i in np.argsort(fitness_scores)]
             new_pop = ranked_pop[:4] 
             while len(new_pop) < num_pop:
@@ -911,10 +901,8 @@ with tab3:
                 new_pop.append(child)
             pop = new_pop
 
-        # Store to prevent NameErrors after rerun
         st.session_state.best_policy = [pop[0][0], pop[0][1]]
         st.session_state.best_m = gen_metrics[best_idx]
-        st.session_state.opt_history = history
         st.session_state.opt_done = True
 
     # --- 3. FINAL AUDIT DASHBOARD ---
@@ -926,22 +914,25 @@ with tab3:
         st.divider()
         st.subheader("✅ AI Optimized Strategy Audit")
         
-        # Row 1: Reliability & Strategy
-        r1c1, r1c2, r1c3 = st.columns(3)
+        r1c1, r1c2, r1c3, r1c4 = st.columns(4)
         r1c1.metric("Optimal Strategy (ROP/Q)", f"{p[0]} / {p[1]}")
-        r1c2.metric("Min Fill Rate (P1)", f"{m['fr']:.1f}%", 
-                    delta="PASS ✅" if m['fr'] >= t_fr else "FAIL ❌", delta_color="normal" if m['fr'] >= t_fr else "inverse")
-        r1c3.metric("Stockout Risk (P99)", f"{m['so']:.1f} Days", 
-                    delta="PASS ✅" if m['so'] <= t_so_days else "FAIL ❌", delta_color="normal" if m['so'] <= t_so_days else "inverse")
+        r1c2.metric("Min Fill Rate (P1)", f"{m['fr_p1']:.1f}%")
+        r1c3.metric("Avg Fill Rate", f"{m['fr_avg']:.1f}%")
+        r1c4.metric("Stockout Risk (P99)", f"{m['so']:.1f} Days")
 
-        # Row 2: Financials & Operations
         r2c1, r2c2, r2c3 = st.columns(3)
         r2c1.metric("Annual Total Cost", f"₹{m['cost']:,.0f}")
-        r2c2.metric("Peak Working Capital", f"₹{m['wc']:,.0f}", 
-                    delta="PASS ✅" if m['wc'] <= wc_limit else "FAIL ❌", delta_color="normal" if m['wc'] <= wc_limit else "inverse")
-        r2c3.metric("Expected Orders / Year", f"{round(m['orders'], 1)}")
+        
+        if use_wc_constraint:
+            r2c2.metric("Peak Working Capital", f"₹{m['wc']:,.0f}", 
+                        delta="PASS ✅" if m['wc'] <= wc_limit else "FAIL ❌", 
+                        delta_color="normal" if m['wc'] <= wc_limit else "inverse")
+            r2c3.metric("Orders / Year", f"{round(m['orders'], 1)}")
+        else:
+            r2c2.metric("Expected Orders / Year", f"{round(m['orders'], 1)}")
+            r2c3.empty()
 
-        # --- 4. INTERACTIVE SANDBOX ---
+        # --- 4. INTERACTIVE SANDBOX & DELTA TABLE ---
         st.divider()
         st.subheader("🎮 Interactive Strategy Sandbox")
         sc1, sc2 = st.columns(2)
@@ -953,24 +944,34 @@ with tab3:
             s_dem = np.maximum(0, np.random.normal(avg_demand, std_demand, (n_s, num_days))).round()
             s_inv = np.full(n_s, opening_balance, dtype=float)
             s_arr = np.zeros((n_s, num_days + lead_time + 1))
-            s_pip, s_so, s_unmet, s_peaks = [np.zeros(n_s) for _ in range(4)]
+            s_pip, s_so, s_unmet, s_peaks, s_orders = [np.zeros(n_s) for _ in range(5)]
             
             for d in range(num_days):
                 s_inv += s_arr[:, d]; s_pip -= s_arr[:, d]; s_inv -= s_dem[:, d]
                 o_m = s_inv < 0; s_so += o_m; s_unmet -= np.where(o_m, s_inv, 0); s_inv = np.where(o_m, 0, s_inv)
                 s_peaks = np.maximum(s_peaks, s_inv)
                 r_m = (s_inv + s_pip <= u_rop)
-                s_arr[r_m, d + lead_time] = u_q; s_pip += np.where(r_m, u_q, 0)
+                s_arr[r_m, d + lead_time] = u_q; s_pip += np.where(r_m, u_q, 0); s_orders += r_m
 
-            u_fr = (1 - (s_unmet / s_dem.sum(axis=1))).mean() * 100
-            u_wc = s_peaks.mean() * unit_value
-            u_cost = (s_peaks.mean() * unit_value * holding_cost_rate) + (s_arr.sum()/u_q * ordering_cost)
+            u_all_fr = (1 - (s_unmet / s_dem.sum(axis=1))) * 100
+            u_fr_avg, u_fr_p1 = u_all_fr.mean(), np.percentile(u_all_fr, 1)
+            u_wc = np.percentile(s_peaks, 99) * unit_value
+            u_cost = (s_peaks.mean() * unit_value * holding_cost_rate) + (s_orders.mean() * ordering_cost)
             
-            st.write("#### Results of Your Strategy vs. AI:")
-            mc1, mc2, mc3 = st.columns(3)
-            mc1.metric("Custom Fill Rate", f"{u_fr:.1f}%", delta=f"{u_fr - m['fr']:.1f}%")
-            mc2.metric("Custom Peak WC", f"₹{u_wc:,.0f}", delta=f"{u_wc - m['wc']:,.0f}", delta_color="inverse")
-            mc3.metric("Custom Annual Cost", f"₹{u_cost:,.0f}", delta=f"{u_cost - m['cost']:,.0f}", delta_color="inverse")
+            # --- THE DELTA TABLE ---
+            st.write("#### Strategy Comparison Table")
+            comparison_df = pd.DataFrame({
+                "KPI": ["Policy (ROP / Qty)", "Avg Fill Rate", "Min Fill Rate (P1)", "Peak Working Capital", "Annual Total Cost"],
+                "AI Optimized": [f"{p[0]} / {p[1]}", f"{m['fr_avg']:.2f}%", f"{m['fr_p1']:.2f}%", f"₹{m['wc']:,.0f}", f"₹{m['cost']:,.0f}"],
+                "Your Custom": [f"{u_rop} / {u_q}", f"{u_fr_avg:.2f}%", f"{u_fr_p1:.2f}%", f"₹{u_wc:,.0f}", f"₹{u_cost:,.0f}"],
+                "Delta": ["-", f"{u_fr_avg - m['fr_avg']:.2f}%", f"{u_fr_p1 - m['fr_p1']:.2f}%", f"₹{u_wc - m['wc']:,.0f}", f"₹{u_cost - m['cost']:,.0f}"]
+            })
+            st.table(comparison_df)
+            
+            if u_cost > m['cost']:
+                st.warning(f"Note: Your strategy costs ₹{u_cost - m['cost']:,.0f} more per year than the AI recommendation.")
+            else:
+                st.success("Your manual strategy is actually cheaper! (Check if constraints like Stockouts are still met).")
 
 
 # with tab3:

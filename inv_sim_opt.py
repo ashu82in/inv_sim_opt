@@ -818,7 +818,7 @@ with tab2:
 with tab3:
     st.header("🧬 Adaptive AI Optimizer")
     
-    # --- 1. BUSINESS CONSTRAINTS ---
+    # --- 1. SETTINGS & GUARDRAILS ---
     st.subheader("Business Guardrails")
     col_c1, col_c2 = st.columns(2)
     with col_c1:
@@ -831,20 +831,16 @@ with tab3:
             max_wc_input = st.number_input("Maximum Cash Ceiling (₹)", value=150000, step=5000)
             st.session_state.max_wc_limit = max_wc_input
         else:
-            st.session_state.max_wc_limit = 999999999 # Safe fallback
-
-    with st.expander("⚙️ Advanced Optimizer Tuning"):
-        n_opt_sim = st.select_slider("Simulation Precision", options=[500, 1000, 2000], value=1000)
-        num_pop = st.slider("Population Size", 20, 100, 40)
-        max_gen = st.slider("Max Generations", 20, 300, 100)
-        patience = st.number_input("Patience (Stable Generations)", value=10)
+            st.session_state.max_wc_limit = 999999999 
 
     # --- 2. THE ENGINE ---
+    # Global constant calculation to prevent NameErrors in Heatmap/Sandbox
+    daily_h_unit_val = unit_value * holding_cost_rate / 365
+
     if st.button("🚀 Run Adaptive Optimization"):
         progress_bar = st.progress(0)
         status_text = st.empty()
         
-        daily_h_unit = unit_value * holding_cost_rate / 365
         demand_matrix = np.maximum(0, np.random.normal(avg_demand, std_demand, (n_opt_sim, num_days))).round()
         total_d_scenario = demand_matrix.sum(axis=1)
         
@@ -861,16 +857,14 @@ with tab3:
             for r_t, q_t in pop:
                 inv = np.full(n_opt_sim, opening_balance, dtype=float)
                 arrivals = np.zeros((n_opt_sim, num_days + lead_time + 1))
-                pipeline_total = np.zeros(n_opt_sim)
-                so, unmet, h_costs, orders, peaks = [np.zeros(n_opt_sim) for _ in range(5)]
+                pipeline_total, so, unmet, h_costs, orders, peaks = [np.zeros(n_opt_sim) for _ in range(6)]
 
                 for d in range(num_days):
-                    inv += arrivals[:, d]; pipeline_total -= arrivals[:, d]
-                    inv -= demand_matrix[:, d]
+                    inv += arrivals[:, d]; pipeline_total -= arrivals[:, d]; inv -= demand_matrix[:, d]
                     o_m = inv < 0; so += o_m; unmet -= np.where(o_m, inv, 0); inv = np.where(o_m, 0, inv)
-                    peaks = np.maximum(peaks, inv); h_costs += (inv * daily_h_unit)
-                    r_m = (inv + pipeline_total <= r_t)
-                    arrivals[r_m, d + lead_time] = q_t 
+                    peaks = np.maximum(peaks, inv)
+                    h_costs += (inv * daily_h_unit_val) # Using the robust global constant
+                    r_m = (inv + pipeline_total <= r_t); arrivals[r_m, d + lead_time] = q_t 
                     pipeline_total += np.where(r_m, q_t, 0); orders += r_m
 
                 all_fr = (1 - (unmet / total_d_scenario)) * 100
@@ -900,8 +894,7 @@ with tab3:
             new_pop = ranked_pop[:4] 
             while len(new_pop) < num_pop:
                 p1, p2 = random.sample(ranked_pop[:12], 2)
-                child = [int((p1[0]+p2[0])/2), int((p1[1]+p2[1])/2)]
-                if random.random() < 0.3: child[0] = np.clip(child[0] + random.randint(-25,25), rop_f, rop_c)
+                child = [int((p1[0]+p2[0])/2), int((p1[1]+p2[1])/2)]; child[0] = np.clip(child[0] + random.randint(-15,15), rop_f, rop_c)
                 new_pop.append(child)
             pop = new_pop
 
@@ -909,11 +902,10 @@ with tab3:
         st.session_state.best_m = gen_metrics[best_idx]
         st.session_state.opt_done = True
 
-    # --- 3. FINAL AUDIT DASHBOARD ---
+    # --- 3. AUDIT DASHBOARD ---
     if st.session_state.get('opt_done'):
         m = st.session_state.best_m
         p = st.session_state.best_policy
-        wc_limit = st.session_state.max_wc_limit
         
         st.divider()
         st.subheader("✅ AI Optimized Strategy Audit")
@@ -930,13 +922,12 @@ with tab3:
         
         if use_wc_constraint:
             r2c3.metric("Peak Working Capital", f"₹{m['wc']:,.0f}", 
-                        delta="PASS ✅" if m['wc'] <= wc_limit else "FAIL ❌", 
-                        delta_color="normal" if m['wc'] <= wc_limit else "inverse")
+                        delta="PASS ✅" if m['wc'] <= st.session_state.max_wc_limit else "FAIL ❌", 
+                        delta_color="normal" if m['wc'] <= st.session_state.max_wc_limit else "inverse")
 
-        # --- 4. SENSITIVITY HEATMAP SUITE (4 Charts) ---
+        # --- 4. SENSITIVITY HEATMAP SUITE ---
         st.divider()
         st.subheader("🌡️ Strategic Resilience Heatmaps")
-        
         if st.button("🌡️ Generate Strategic Heatmap Suite"):
             n_steps = 10
             lt_f = lead_time if lead_time > 0 else 1
@@ -957,15 +948,16 @@ with tab3:
                         r_m = (h_inv + h_pip <= h_rop); h_arr[r_m, d + lead_time] = h_q; h_pip += np.where(r_m, h_q, 0); h_orders += r_m
 
                     sim_matrix[i, j, 0] = (1 - (h_unmet / h_demands.sum(axis=1))).mean() * 100
-                    sim_matrix[i, j, 1] = (h_peaks.mean() * daily_h_unit * 365) + (h_orders.mean() * ordering_cost)
+                    # FIXED: Using the global daily_h_unit_val here
+                    sim_matrix[i, j, 1] = (h_peaks.mean() * unit_value * holding_cost_rate) + (h_orders.mean() * ordering_cost)
                     sim_matrix[i, j, 2] = h_peaks.mean() * unit_value
                     sim_matrix[i, j, 3] = h_so.mean()
 
-            m_c1, m_c2 = st.columns(2)
-            with m_c1:
+            mc1, mc2 = st.columns(2)
+            with mc1:
                 st.plotly_chart(px.imshow(sim_matrix[:, :, 0], labels=dict(x="Qty", y="ROP", color="FR%"), x=q_range, y=rop_range, color_continuous_scale='RdYlGn', title="Avg Fill Rate"), use_container_width=True)
                 st.plotly_chart(px.imshow(sim_matrix[:, :, 1], labels=dict(x="Qty", y="ROP", color="Cost"), x=q_range, y=rop_range, color_continuous_scale='RdYlGn_r', title="Avg Total Cost"), use_container_width=True)
-            with m_c2:
+            with mc2:
                 st.plotly_chart(px.imshow(sim_matrix[:, :, 3], labels=dict(x="Qty", y="ROP", color="Days"), x=q_range, y=rop_range, color_continuous_scale='RdYlGn_r', title="Avg Stockout Days"), use_container_width=True)
                 st.plotly_chart(px.imshow(sim_matrix[:, :, 2], labels=dict(x="Qty", y="ROP", color="WC"), x=q_range, y=rop_range, color_continuous_scale='RdYlGn_r', title="Avg Working Capital"), use_container_width=True)
 
@@ -1000,7 +992,6 @@ with tab3:
                 "Delta": ["-", f"{u_fr_avg - m['fr_avg']:.2f}%", f"{u_fr_p1 - m['fr_p1']:.2f}%", f"₹{u_wc - m['wc']:,.0f}", f"₹{u_cost - m['cost']:,.0f}"]
             })
             st.table(comp_df)
-
 # with tab3:
 #     st.header("🧬 AI Inventory Optimizer")
     

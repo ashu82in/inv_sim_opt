@@ -828,6 +828,7 @@ with tab3:
     with col_c2:
         use_wc_constraint = st.toggle("Limit Peak Working Capital (P99)", value=True)
         max_wc_input = st.number_input("Maximum Cash Ceiling (₹)", value=150000, step=5000)
+        # Store in session state to ensure accessibility across reruns
         st.session_state.max_wc_limit = max_wc_input
 
     with st.expander("⚙️ Advanced Optimizer Tuning"):
@@ -836,7 +837,7 @@ with tab3:
         max_gen = st.slider("Max Generations", 20, 300, 100)
         patience = st.number_input("Patience (Stable Generations)", value=10)
 
-    # --- 2. THE ENGINE ---
+    # --- 2. OPTIMIZATION ENGINE ---
     if st.button("🚀 Run Adaptive Optimization"):
         progress_bar = st.progress(0)
         status_text = st.empty()
@@ -870,6 +871,7 @@ with tab3:
                     pipeline_total += np.where(r_m, q_t, 0); orders += r_m
 
                 all_fr = (1 - (unmet / total_d_scenario)) * 100
+                # FIXED KEYS: Ensuring these match the display section exactly
                 fr_p1, fr_avg = np.percentile(all_fr, 1), all_fr.mean()
                 so_p99, wc_p99 = np.percentile(so, 99), np.percentile(peaks, 99) * unit_value
                 avg_cost = (h_costs + (orders * ordering_cost)).mean()
@@ -914,20 +916,23 @@ with tab3:
         st.divider()
         st.subheader("✅ AI Optimized Strategy Audit")
         
+        # Row 1: Reliability
         r1c1, r1c2, r1c3, r1c4 = st.columns(4)
         r1c1.metric("Optimal Strategy (ROP/Q)", f"{p[0]} / {p[1]}")
         r1c2.metric("Min Fill Rate (P1)", f"{m['fr_p1']:.1f}%")
         r1c3.metric("Avg Fill Rate", f"{m['fr_avg']:.1f}%")
         r1c4.metric("Stockout Risk (P99)", f"{m['so']:.1f} Days")
 
+        # Row 2: Financials & Operations
         r2c1, r2c2, r2c3 = st.columns(3)
         r2c1.metric("Annual Total Cost", f"₹{m['cost']:,.0f}")
         
+        # FIXED: Only show if toggle is active
         if use_wc_constraint:
             r2c2.metric("Peak Working Capital", f"₹{m['wc']:,.0f}", 
                         delta="PASS ✅" if m['wc'] <= wc_limit else "FAIL ❌", 
                         delta_color="normal" if m['wc'] <= wc_limit else "inverse")
-            r2c3.metric("Orders / Year", f"{round(m['orders'], 1)}")
+            r2c3.metric("Expected Orders / Year", f"{round(m['orders'], 1)}")
         else:
             r2c2.metric("Expected Orders / Year", f"{round(m['orders'], 1)}")
             r2c3.empty()
@@ -967,12 +972,6 @@ with tab3:
                 "Delta": ["-", f"{u_fr_avg - m['fr_avg']:.2f}%", f"{u_fr_p1 - m['fr_p1']:.2f}%", f"₹{u_wc - m['wc']:,.0f}", f"₹{u_cost - m['cost']:,.0f}"]
             })
             st.table(comparison_df)
-            
-            if u_cost > m['cost']:
-                st.warning(f"Note: Your strategy costs ₹{u_cost - m['cost']:,.0f} more per year than the AI recommendation.")
-            else:
-                st.success("Your manual strategy is actually cheaper! (Check if constraints like Stockouts are still met).")
-
 
 # with tab3:
 #     st.header("🧬 AI Inventory Optimizer")

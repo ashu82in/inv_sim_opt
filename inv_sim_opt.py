@@ -930,31 +930,7 @@ with tab3:
                         delta="PASS ✅" if m['wc'] <= st.session_state.max_wc_limit else "FAIL ❌", 
                         delta_color="normal" if m['wc'] <= st.session_state.max_wc_limit else "inverse")
 
-        # --- 4. HIGH-VISIBILITY HEATMAPS (BUG FIX APPLIED) ---
-        st.divider()
-        st.subheader("🌡️ Strategic Resilience Heatmaps")
-        if st.button("🌡️ Generate Strategic Heatmaps"):
-            n_steps = 12
-            rop_range = np.linspace(max(0, p[0]*0.4), p[0]*1.6, n_steps).astype(int)
-            q_range = np.linspace(max(50, p[1]*0.4), p[1]*1.6, n_steps).astype(int)
-            sim_matrix = np.zeros((n_steps, n_steps, 4)) 
-            h_dem = np.maximum(0, np.random.normal(avg_demand, std_demand, (500, num_days))).round()
-            
-            for i, h_rop in enumerate(rop_range):
-                for j, h_q in enumerate(q_range):
-                    inv = np.full(500, opening_balance, dtype=float); arr = np.zeros((500, num_days + lead_time + 1))
-                    pip, so, unmet, peaks, ords = [np.zeros(500) for _ in range(5)]
-                    for d in range(num_days):
-                        inv += arr[:, d]; pip -= arr[:, d]; inv -= h_dem[:, d]
-                        o_m = inv < 0; so += o_m; unmet -= np.where(o_m, inv, 0); inv = np.where(o_m, 0, inv)
-                        peaks = np.maximum(peaks, inv)
-                        r_m = (inv + pip <= h_rop); arr[r_m, d + lead_time] = h_q; pip += np.where(r_m, h_q, 0); ords += r_m
-
-                    sim_matrix[i, j, 0] = (1 - (unmet / h_dem.sum(axis=1))).mean() * 100
-                    sim_matrix[i, j, 1] = (peaks.mean() * unit_value * holding_cost_rate) + (ords.mean() * ordering_cost)
-                    sim_matrix[i, j, 3] = so.mean()
-                    sim_matrix[i, j, 2] = peaks.mean() * unit_value
-
+       # --- 4. HIGH-VISIBILITY STRATEGIC HEATMAPS (FIXED) ---
             configs = [
                 (0, "Average Fill Rate %", "RdYlGn"),
                 (1, "Average Total Cost (₹)", "RdYlGn_r"),
@@ -963,21 +939,42 @@ with tab3:
             ]
 
             for idx, title, scale in configs:
-                fig = px.imshow(sim_matrix[:, :, idx], x=q_range, y=rop_range, color_continuous_scale=scale, 
-                                title=title, height=750, aspect="auto", origin="lower")
-                
-                fig.update_traces(text=np.around(sim_matrix[:, :, idx], 1), texttemplate="%{text}")
-                
-                # FIXED: Removed 'autosize' from yaxis and fixed colorbar alignment
-                fig.update_layout(
-                    yaxis=dict(type='linear'),
-                    coloraxis_colorbar=dict(lenmode="pixels", len=600, yanchor="middle", y=0.5, thickness=30),
-                    margin=dict(l=60, r=60, t=100, b=60),
-                    title_font_size=24
+                # 1. Create the figure without axis anchoring
+                fig = px.imshow(
+                    sim_matrix[:, :, idx], 
+                    x=q_range, 
+                    y=rop_range, 
+                    color_continuous_scale=scale, 
+                    title=title, 
+                    height=600, 
+                    aspect="auto", # IMPORTANT: This lets the cells stretch to fill the 600px height
+                    origin="lower" # Puts lower ROP at the bottom
                 )
-                # This ensures the rows are significantly taller (thick)
-                fig.update_yaxes(scaleanchor="x", scaleratio=0.2)
                 
+                # 2. Add text annotations so data is readable even at a glance
+                fig.update_traces(
+                    text=np.around(sim_matrix[:, :, idx], 1), 
+                    texttemplate="%{text}",
+                    hoverongaps=False
+                )
+                
+                # 3. Clean up the layout
+                fig.update_layout(
+                    # This ensures the ROP axis label doesn't overlap
+                    yaxis=dict(title="Reorder Point (ROP)", tickmode='linear'),
+                    xaxis=dict(title="Order Quantity (Q)"),
+                    # Align color bar perfectly
+                    coloraxis_colorbar=dict(
+                        lenmode="fraction", 
+                        len=1.0, 
+                        thickness=30,
+                        yanchor="middle", 
+                        y=0.5
+                    ),
+                    margin=dict(l=80, r=80, t=100, b=80),
+                    title_font_size=22
+                )
+
                 st.plotly_chart(fig, use_container_width=True)
 
         # --- 5. INTERACTIVE SANDBOX ---

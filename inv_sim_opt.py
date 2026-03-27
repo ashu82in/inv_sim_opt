@@ -818,7 +818,7 @@ with tab2:
 with tab3:
     st.header("🧬 Adaptive AI Optimizer")
     
-    # --- 1. CONSTRAINTS & SETTINGS ---
+    # --- 1. BUSINESS CONSTRAINTS ---
     st.subheader("Business Guardrails")
     col_c1, col_c2 = st.columns(2)
     with col_c1:
@@ -864,8 +864,9 @@ with tab3:
                 so, unmet, h_costs, orders, peaks = [np.zeros(n_opt_sim) for _ in range(5)]
 
                 for d in range(num_days):
-                    inv += arrivals[:, d]
-                    pipeline_total -= arrivals[:, d]
+                    landing = arrivals[:, d]
+                    inv += landing
+                    pipeline_total -= landing
                     inv -= demand_matrix[:, d]
                     out_mask = inv < 0
                     so += out_mask
@@ -893,6 +894,7 @@ with tab3:
 
             best_idx = np.argmin(fitness_scores)
             curr_best_f = fitness_scores[best_idx]
+            
             if curr_best_f < (best_fitness_overall - 5.0):
                 best_fitness_overall, gens_without_imp = curr_best_f, 0
             else:
@@ -913,25 +915,36 @@ with tab3:
                 new_pop.append(child)
             pop = new_pop
 
-        best_m = gen_metrics[best_idx]
+        # --- THE FIX: Store everything in Session State ---
         st.session_state.best_policy = [pop[0][0], pop[0][1]]
+        st.session_state.best_m = gen_metrics[best_idx]
+        st.session_state.opt_history = history
+        st.session_state.opt_log = log_data
+        st.session_state.optimized_done = True
+
+    # --- 3. PERSISTENT RESULTS & SENSITIVITY ---
+    if st.session_state.get('optimized_done'):
+        best_m = st.session_state.best_m
+        best_pol = st.session_state.best_policy
         
         st.divider()
         st.subheader("✅ Optimized Strategy & Reality Check")
         k1, k2, k3, k4 = st.columns(4)
-        k1.metric("Optimal ROP/Q", f"{pop[0][0]} / {pop[0][1]}")
-        k2.metric("Min Fill Rate", f"{best_m['fr']:.1f}%")
-        k3.metric("Peak WC", f"₹{best_m['wc']:,.0f}")
+        
+        fr_pass = best_m['fr'] >= target_fr
+        so_pass = not use_so_constraint or best_m['so'] <= target_so_days
+        wc_pass = not use_wc_constraint or best_m['wc'] <= max_wc_allowed
+
+        k1.metric("Optimal ROP/Q", f"{best_pol[0]} / {best_pol[1]}")
+        k2.metric("Min Fill Rate", f"{best_m['fr']:.1f}%", delta="PASS" if fr_pass else "FAIL", delta_color="normal" if fr_pass else "inverse")
+        k3.metric("Peak WC", f"₹{best_m['wc']:,.0f}", delta="PASS" if wc_pass else "FAIL", delta_color="normal" if wc_pass else "inverse")
         k4.metric("Orders / Year", f"{round(best_m['avg_orders'], 1)}")
 
-        st.plotly_chart(px.line(y=history, title="Genetic Optimization Convergence"))
+        st.plotly_chart(px.line(y=st.session_state.opt_history, title="AI Learning Curve"))
 
-    # --- 3. STRATEGIC SENSITIVITY TESTING (The "What-If" Engine) ---
-    if 'best_policy' in st.session_state:
+        # --- SENSITIVITY SECTION ---
         st.divider()
         st.subheader("🧪 Strategic Sensitivity Analysis")
-        st.write("Stress-test the AI's proposal against real-world chaos.")
-        
         col_s1, col_s2 = st.columns(2)
         with col_s1:
             lt_stress = st.slider("Supply Chain Delay (Lead Time + days)", 0, 7, 2)
@@ -939,12 +952,11 @@ with tab3:
             demand_stress = st.slider("Demand Surge (Average Demand + %)", 0, 100, 20)
             
         if st.button("⚖️ Run Sensitivity Check"):
-            # Setup "Stressed" params
+            # Setup Stressed Environment
             s_lt = lead_time + lt_stress
             s_demand = avg_demand * (1 + demand_stress/100)
-            s_rop, s_q = st.session_state.best_policy
             
-            # Re-simulating 2,000 scenarios in the "stressed" environment
+            # Vectorized Stress Simulation
             n_s = 2000
             s_demands = np.maximum(0, np.random.normal(s_demand, std_demand, (n_s, num_days))).round()
             s_inv = np.full(n_s, opening_balance, dtype=float)
@@ -959,9 +971,9 @@ with tab3:
                 s_so += o_m
                 s_unmet -= np.where(o_m, s_inv, 0)
                 s_inv = np.where(o_m, 0, s_inv)
-                r_m = (s_inv + s_pip <= s_rop)
-                s_arr[r_m, d + s_lt] = s_q
-                s_pip += np.where(r_m, s_q, 0)
+                r_m = (s_inv + s_pip <= best_pol[0])
+                s_arr[r_m, d + s_lt] = best_pol[1]
+                s_pip += np.where(r_m, best_pol[1], 0)
             
             s_fr = (1 - (s_unmet / s_demands.sum(axis=1))).mean() * 100
             s_so_avg = s_so.mean()
@@ -970,11 +982,6 @@ with tab3:
             c1, c2 = st.columns(2)
             c1.metric("Stressed Fill Rate", f"{s_fr:.2f}%", delta=f"{s_fr - best_m['fr']:.2f}%", delta_color="inverse")
             c2.metric("Stressed Stockout Days", f"{s_so_avg:.1f}", delta=f"{s_so_avg - best_m['so']:.1f}", delta_color="inverse")
-            
-            if s_fr < 90:
-                st.error(f"🚨 DANGER: This policy is fragile. A {demand_stress}% surge + {lt_stress} day delay crashes your service level.")
-            else:
-                st.success("🛡️ RESILIENT: This policy holds up even under significant stress.")
 # with tab3:
 #     st.header("🧬 AI Inventory Optimizer")
     
